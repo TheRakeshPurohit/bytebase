@@ -1,38 +1,57 @@
 <template>
-  <div v-if="label" class="flex items-center space-x-2">
-    <slot name="title"> </slot>
-
-    <label v-for="lbl in labelList" :key="lbl.key">
-      <input
-        type="radio"
-        :value="lbl.key"
-        :checked="lbl.key === label"
-        @change="onChange"
-      />
-      <span class="capitalize ml-1">
-        {{ hidePrefix(lbl.key) }}
-      </span>
-    </label>
-  </div>
+  <NSelect
+    v-if="visible"
+    :options="options"
+    :value="label"
+    style="width: 9rem"
+    v-bind="$attrs"
+    @update-value="$emit('update:label', $event)"
+  />
 </template>
 
 <script lang="ts" setup>
-import { Label, LabelKeyType } from "../../types";
-import { hidePrefix } from "../../utils";
+import type { SelectOption } from "naive-ui";
+import { NSelect } from "naive-ui";
+import { computed } from "vue";
+import type { ComposedDatabase } from "@/types";
+import {
+  displayDeploymentMatchSelectorKey,
+  getAvailableDeploymentConfigMatchSelectorKeyList,
+} from "@/utils";
 
-defineProps<{
-  label: LabelKeyType;
-  labelList: Label[];
-}>();
-
-const emit = defineEmits<{
-  (event: "update:label", label: LabelKeyType): void;
-}>();
-
-const onChange = (e: Event) => {
-  const target = e.target as HTMLInputElement;
-  if (target.checked) {
-    emit("update:label", target.value);
+const props = withDefaults(
+  defineProps<{
+    databaseList: ComposedDatabase[];
+    label: string;
+    excludedKeyList?: string[];
+  }>(),
+  {
+    excludedKeyList: () => [],
   }
-};
+);
+
+defineEmits<{
+  (event: "update:label", label: string): void;
+}>();
+
+const labelKeyList = computed(() => {
+  return getAvailableDeploymentConfigMatchSelectorKeyList(
+    props.databaseList,
+    true /* withVirtualLabelKeys */,
+    true /* sort */
+  ).filter((key) => !props.excludedKeyList.includes(key));
+});
+
+const visible = computed(() => {
+  if (!props.label) return false;
+  return labelKeyList.value.includes(props.label);
+});
+const options = computed(() => {
+  return labelKeyList.value.map<SelectOption>((key) => {
+    return {
+      value: key,
+      label: displayDeploymentMatchSelectorKey(key),
+    };
+  });
+});
 </script>

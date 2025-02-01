@@ -1,0 +1,74 @@
+<template>
+  <div class="w-full flex items-start gap-x-4 flex-wrap">
+    <div
+      class="textlabel h-[26px] inline-flex items-center"
+      :class="labelClass"
+    >
+      {{ $t("task.task-checks") }}
+    </div>
+
+    <div class="flex-1">
+      <PlanCheckRunBadgeBar
+        :plan-check-run-list="planCheckRunList"
+        @select-type="selectedType = $event"
+      />
+    </div>
+
+    <div class="flex justify-end items-center shrink-0">
+      <PlanCheckRunButton
+        v-if="allowRunChecks"
+        :plan-check-run-list="planCheckRunList"
+        @run-checks="runChecks"
+      />
+    </div>
+
+    <PlanCheckRunModal
+      v-if="planCheckRunList.length > 0 && selectedType"
+      :selected-type="selectedType"
+      :plan-check-run-list="planCheckRunList"
+      :database="database"
+      @close="selectedType = undefined"
+    />
+  </div>
+</template>
+
+<script lang="ts" setup>
+import { ref } from "vue";
+import { planServiceClient } from "@/grpcweb";
+import type { ComposedDatabase } from "@/types";
+import type {
+  PlanCheckRun,
+  PlanCheckRun_Type,
+} from "@/types/proto/v1/plan_service";
+import type { VueClass } from "@/utils";
+import PlanCheckRunBadgeBar from "./PlanCheckRunBadgeBar.vue";
+import PlanCheckRunButton from "./PlanCheckRunButton.vue";
+import PlanCheckRunModal from "./PlanCheckRunModal.vue";
+import { usePlanCheckRunContext } from "./context";
+
+const props = withDefaults(
+  defineProps<{
+    allowRunChecks?: boolean;
+    labelClass?: VueClass;
+    planName: string;
+    planCheckRunList?: PlanCheckRun[];
+    database: ComposedDatabase;
+  }>(),
+  {
+    allowRunChecks: true,
+    labelClass: "",
+    planCheckRunList: () => [],
+  }
+);
+
+const { events } = usePlanCheckRunContext();
+
+const selectedType = ref<PlanCheckRun_Type>();
+
+const runChecks = async () => {
+  await planServiceClient.runPlanChecks({
+    name: props.planName,
+  });
+  events.emit("status-changed");
+};
+</script>

@@ -1,0 +1,134 @@
+<template>
+  <NDataTable
+    key="project-members"
+    :columns="columns"
+    :data="bindings"
+    :row-key="(row: MemberBinding) => row.binding"
+    :bordered="true"
+    :striped="true"
+    :checked-row-keys="selectedBindings"
+    :max-height="'calc(100vh - 15rem)'"
+    virtual-scroll
+    @update:checked-row-keys="handleMemberSelection"
+  />
+</template>
+
+<script lang="tsx" setup>
+import type { DataTableColumn, DataTableRowKey } from "naive-ui";
+import { NDataTable } from "naive-ui";
+import { computed, h } from "vue";
+import { useI18n } from "vue-i18n";
+import GroupMemberNameCell from "@/components/User/Settings/UserDataTableByGroup/cells/GroupMemberNameCell.vue";
+import GroupNameCell from "@/components/User/Settings/UserDataTableByGroup/cells/GroupNameCell.vue";
+import { useUserStore } from "@/store";
+import { unknownUser } from "@/types";
+import type { User } from "@/types/proto/v1/auth_service";
+import type { MemberBinding } from "../types";
+import UserNameCell from "./cells/UserNameCell.vue";
+import UserOperationsCell from "./cells/UserOperationsCell.vue";
+import UserRolesCell from "./cells/UserRolesCell.vue";
+
+const props = defineProps<{
+  allowEdit: boolean;
+  bindings: MemberBinding[];
+  selectedBindings: string[];
+  selectDisabled: (memberBinding: MemberBinding) => boolean;
+  onClickUser?: (user: User, event: MouseEvent) => void;
+}>();
+
+const emit = defineEmits<{
+  (event: "update-binding", binding: MemberBinding): void;
+  (event: "revoke-binding", binding: MemberBinding): void;
+  (event: "update-selected-bindings", bindings: string[]): void;
+}>();
+
+const { t } = useI18n();
+const userStore = useUserStore();
+
+const columns = computed(
+  (): DataTableColumn<MemberBinding & { hide?: boolean }>[] => {
+    return [
+      {
+        type: "selection",
+        disabled: (memberBinding: MemberBinding) => {
+          return props.selectDisabled(memberBinding);
+        },
+      },
+      {
+        type: "expand",
+        hide: !props.bindings.some((binding) => binding.type === "groups"),
+        expandable: (memberBinding: MemberBinding) =>
+          memberBinding.type === "groups",
+        renderExpand: (memberBinding: MemberBinding) => {
+          return (
+            <div class="pl-20">
+              {memberBinding.group?.members.map((member) => {
+                const user =
+                  userStore.getUserByIdentifier(member.member) ?? unknownUser();
+                return (
+                  <GroupMemberNameCell
+                    key={`${memberBinding.group?.name}-${user.name}`}
+                    user={user}
+                    onClickUser={props.onClickUser}
+                  />
+                );
+              })}
+            </div>
+          );
+        },
+      },
+      {
+        key: "account",
+        title: t("settings.members.table.account"),
+        width: "32rem",
+        resizable: true,
+        render: (memberBinding: MemberBinding) => {
+          if (memberBinding.type === "groups") {
+            return <GroupNameCell group={memberBinding.group!} />;
+          }
+          return (
+            <UserNameCell
+              binding={memberBinding}
+              onClickUser={props.onClickUser}
+            />
+          );
+        },
+      },
+      {
+        key: "roles",
+        title: t("settings.members.table.role"),
+        resizable: true,
+        render: (memberBinding: MemberBinding) => {
+          return h(UserRolesCell, {
+            role: memberBinding,
+            key: memberBinding.binding,
+          });
+        },
+      },
+      {
+        key: "operations",
+        title: "",
+        width: "4rem",
+        render: (memberBinding: MemberBinding) => {
+          return h(UserOperationsCell, {
+            key: memberBinding.binding,
+            allowEdit: props.allowEdit,
+            binding: memberBinding,
+            "onUpdate-binding": () => {
+              emit("update-binding", memberBinding);
+            },
+            "onRevoke-binding": () => {
+              emit("revoke-binding", memberBinding);
+            },
+          });
+        },
+      },
+    ].filter((column) => !column.hide) as DataTableColumn<MemberBinding>[];
+  }
+);
+
+const handleMemberSelection = (rowKeys: DataTableRowKey[]) => {
+  const members = rowKeys as string[];
+  emit("update-selected-bindings", members);
+};
+</script>

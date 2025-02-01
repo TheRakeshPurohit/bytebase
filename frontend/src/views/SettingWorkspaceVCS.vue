@@ -1,88 +1,122 @@
 <template>
-  <div class="space-y-4">
+  <div class="space-y-4 h-full flex flex-col">
     <div class="textinfolabel">
-      {{ $t("version-control.setting.description") }}
-      <span class="text-accent">{{
-        $t("version-control.setting.description-highlight")
-      }}</span>
+      {{ $t("gitops.setting.description") }}
+      <LearnMoreLink
+        url="https://www.bytebase.com/docs/vcs-integration/add-git-provider?source=console"
+        class="ml-1 text-sm"
+      />
     </div>
-    <div class="flex items-center justify-end">
-      <button
-        type="button"
-        class="btn-primary ml-3 inline-flex justify-center py-2 px-4"
+    <div v-if="vcsList.length > 0" class="flex justify-end">
+      <NButton
+        type="primary"
+        :disabled="!hasCreateVCSPermission"
+        class="capitalize"
         @click.prevent="addVCSProvider"
       >
-        {{ $t("version-control.setting.add-git-provider.self") }}
-      </button>
-    </div>
-    <div class="pt-4 border-t">
-      <FeatureAttention
-        v-if="!has3rdPartyLoginFeature && vcsList.length > 0"
-        custom-class="mb-5"
-        feature="bb.feature.3rd-party-auth"
-        :description="
-          $t('subscription.features.bb-feature-3rd-party-auth.desc')
-        "
-      />
-      <div v-if="vcsList.length > 0" class="space-y-6">
-        <template v-for="(vcs, index) in vcsList" :key="index">
-          <VCSCard :vcs="vcs" />
+        <template #icon>
+          <PlusIcon class="h-4 w-4" />
         </template>
-      </div>
-      <template v-else>
-        <VCSSetupWizard />
-      </template>
+        {{ $t("gitops.setting.add-git-provider.self") }}
+      </NButton>
     </div>
+
+    <NDataTable
+      v-if="vcsList.length > 0 || loading"
+      key="vcs-table"
+      :data="vcsList"
+      :row-key="(vcs: VCSProvider) => vcs.name"
+      :columns="columnList"
+      :striped="true"
+      :bordered="true"
+    />
+    <VCSSetupWizard v-else class="flex-1" :show-cancel="false" />
   </div>
 </template>
 
-<script lang="ts">
-import { reactive, computed, watchEffect } from "vue";
+<script lang="tsx" setup>
+import { PlusIcon } from "lucide-vue-next";
+import { NButton, NDataTable } from "naive-ui";
+import type { DataTableColumn } from "naive-ui";
+import { computed, watchEffect, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
-import VCSCard from "../components/VCSCard.vue";
-import VCSSetupWizard from "../components/VCSSetupWizard.vue";
-import { useStore } from "vuex";
+import LearnMoreLink from "@/components/LearnMoreLink.vue";
+import VCSIcon from "@/components/VCS/VCSIcon.vue";
+import VCSSetupWizard from "@/components/VCS/VCSSetupWizard.vue";
+import {
+  WORKSPACE_ROUTE_GITOPS_CREATE,
+  WORKSPACE_ROUTE_GITOPS_DETAIL,
+} from "@/router/dashboard/workspaceRoutes";
+import { useVCSProviderStore } from "@/store";
+import { getVCSProviderId } from "@/store/modules/v1/common";
+import type { VCSProvider } from "@/types/proto/v1/vcs_provider_service";
+import { hasWorkspacePermissionV2 } from "@/utils";
 
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
-interface LocalState {}
+const vcsV1Store = useVCSProviderStore();
+const router = useRouter();
+const { t } = useI18n();
+const loading = ref<boolean>(true);
 
-export default {
-  name: "SettingWorkspaceVCS",
-  components: {
-    VCSCard,
-    VCSSetupWizard,
-  },
-  setup() {
-    const store = useStore();
-    const router = useRouter();
-    const state = reactive<LocalState>({});
+const hasCreateVCSPermission = computed(() => {
+  return hasWorkspacePermissionV2("bb.vcsProviders.create");
+});
 
-    const prepareVCSList = () => {
-      store.dispatch("vcs/fetchVCSList");
-    };
-
-    watchEffect(prepareVCSList);
-
-    const vcsList = computed(() => {
-      return store.getters["vcs/vcsList"]();
-    });
-
-    const addVCSProvider = () => {
-      router.push({
-        name: "setting.workspace.version-control.create",
-      });
-    };
-
-    const has3rdPartyLoginFeature = computed((): boolean => {
-      return store.getters["subscription/feature"]("bb.feature.3rd-party-auth");
-    });
-
-    return {
-      state,
-      vcsList,
-      addVCSProvider,
-      has3rdPartyLoginFeature,
-    };
-  },
+const prepareVCSList = async () => {
+  await vcsV1Store.getOrFetchVCSList();
+  loading.value = false;
 };
+
+watchEffect(prepareVCSList);
+
+const vcsList = computed(() => {
+  return vcsV1Store.vcsList;
+});
+
+const addVCSProvider = () => {
+  router.push({
+    name: WORKSPACE_ROUTE_GITOPS_CREATE,
+  });
+};
+
+const columnList = computed((): DataTableColumn<VCSProvider>[] => {
+  return [
+    {
+      key: "title",
+      title: t("common.name"),
+      render: (vcs) => (
+        <div class="flex items-center gap-x-2">
+          <VCSIcon type={vcs.type} customClass={"h-5"} />
+          {vcs.title}
+        </div>
+      ),
+    },
+    {
+      key: "instance_url",
+      title: `${t("common.instance")} URL`,
+      render: (vcs) => vcs.url,
+    },
+    {
+      key: "view",
+      title: "",
+      render: (vcs) => (
+        <div class="flex justify-end">
+          <NButton
+            size={"small"}
+            onClick={() => {
+              router.push({
+                name: WORKSPACE_ROUTE_GITOPS_DETAIL,
+                params: {
+                  vcsResourceId: getVCSProviderId(vcs.name),
+                },
+              });
+            }}
+          >
+            {t("common.view")}
+          </NButton>
+        </div>
+      ),
+    },
+  ];
+});
 </script>

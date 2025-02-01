@@ -1,56 +1,73 @@
 import {
-  GlobalThemeOverrides,
-  zhCN,
+  type GlobalThemeOverrides,
+  type NLocale,
+  type NDateLocale,
   dateZhCN,
-  NLocale,
-  NDateLocale,
+  zhCN,
 } from "naive-ui";
-
-import { curLocale } from "./src/plugins/i18n";
-
 import { computed } from "vue";
-
-const callVar = (css: string) => {
-  return getComputedStyle(document.documentElement).getPropertyValue(css);
-};
+import { callCssVariable } from "@/utils";
+import i18n from "./src/plugins/i18n";
 
 export const themeOverrides = computed((): GlobalThemeOverrides => {
   return {
     common: {
-      primaryColor: callVar("--color-accent"),
-      primaryColorHover: callVar("--color-accent-hover"),
-      primaryColorPressed: callVar("--color-accent"),
+      primaryColor: callCssVariable("--color-accent"),
+      primaryColorHover: callCssVariable("--color-accent-hover"),
+      primaryColorPressed: callCssVariable("--color-accent"),
 
-      successColor: callVar("--color-success"),
-      successColorHover: callVar("--color-success-hover"),
-      successColorPressed: callVar("--color-success"),
+      successColor: callCssVariable("--color-success"),
+      successColorHover: callCssVariable("--color-success-hover"),
+      successColorPressed: callCssVariable("--color-success"),
 
-      warningColor: callVar("--color-warning"),
-      warningColorHover: callVar("--color-warning-hover"),
-      warningColorPressed: callVar("--color-warning"),
+      warningColor: callCssVariable("--color-warning"),
+      warningColorHover: callCssVariable("--color-warning-hover"),
+      warningColorPressed: callCssVariable("--color-warning"),
 
-      errorColor: callVar("--color-error"),
-      errorColorHover: callVar("--color-error-hover"),
-      errorColorPressed: callVar("--color-error"),
+      infoColor: callCssVariable("--color-info"),
+      infoColorHover: callCssVariable("--color-info-hover"),
+      infoColorPressed: callCssVariable("--color-info"),
+
+      errorColor: callCssVariable("--color-error"),
+      errorColorHover: callCssVariable("--color-error-hover"),
+      errorColorPressed: callCssVariable("--color-error"),
     },
     Button: {
-      colorInfo: callVar("--color-accent"),
-      colorHoverInfo: callVar("--color-accent-hover"),
-      colorPressedInfo: callVar("--color-accent-disabled"),
-      colorFocusInfo: callVar("--color-accent"),
-      colorDisabledInfo: callVar("--color-accent-disabled"),
-      borderInfo: callVar("--color-accent"),
-      borderHoverInfo: callVar("--color-accent-hover"),
-      borderFocusInfo: callVar("--color-accent"),
+      color: "white",
+      colorHover: "white",
+      colorFocus: "white",
+      colorPressed: "white",
     },
-    Dialog: {
-      iconColorInfo: callVar("--color-accent"),
+  };
+});
+
+export const darkThemeOverrides = computed((): GlobalThemeOverrides => {
+  return {
+    common: {
+      primaryColor: callCssVariable("--color-matrix-green"),
+      primaryColorHover: callCssVariable("--color-matrix-green-hover"),
+      primaryColorPressed: callCssVariable("--color-matrix-green"),
+    },
+    Button: {
+      color: "transparent",
+      colorHover: "transparent",
+      colorFocus: "transparent",
+      colorPressed: "transparent",
+      colorInfo: callCssVariable("--color-matrix-green"),
+      colorHoverInfo: callCssVariable("--color-matrix-green-hover"),
+      colorFocusInfo: callCssVariable("--color-matrix-green"),
+      borderInfo: callCssVariable("--color-matrix-green"),
+      borderHoverInfo: callCssVariable("--color-matrix-green-hover"),
+      borderFocusInfo: callCssVariable("--color-matrix-green"),
+    },
+    Tabs: {
+      tabTextColorCard: callCssVariable("--color-control-placeholder"),
     },
   };
 });
 
 const isZhCn = (): boolean => {
-  return curLocale.value === "zh-CN";
+  return i18n.global.locale.value === "zh-CN";
 };
 
 export const dateLang = computed((): NDateLocale | null => {

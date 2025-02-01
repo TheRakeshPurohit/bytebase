@@ -2,36 +2,37 @@
   <slot />
 </template>
 
-<script lang="ts">
-import { watchEffect } from "vue";
-import { useStore } from "vuex";
-import { idFromSlug } from "../utils";
+<script lang="ts" setup>
+import { watchEffect, computed } from "vue";
+import { useInstanceV1Store } from "@/store";
+import { instanceNamePrefix } from "@/store/modules/v1/common";
+import { isValidInstanceName } from "@/types";
 
-export default {
-  name: "ProvideInstanceContext",
-  props: {
-    instanceSlug: {
-      required: true,
-      type: String,
-    },
-  },
-  async setup(props) {
-    const store = useStore();
+const props = defineProps<{
+  instanceId: string;
+}>();
 
-    const prepareInstanceContext = async function () {
-      await Promise.all([
-        store.dispatch(
-          "database/fetchDatabaseListByInstanceId",
-          idFromSlug(props.instanceSlug)
-        ),
-        store.dispatch(
-          "instance/fetchInstanceUserListById",
-          idFromSlug(props.instanceSlug)
-        ),
-      ]);
-    };
+const instanceStore = useInstanceV1Store();
 
-    watchEffect(prepareInstanceContext);
-  },
+const instanceName = computed(() => `${instanceNamePrefix}${props.instanceId}`);
+const instance = computed(() =>
+  instanceStore.getInstanceByName(instanceName.value)
+);
+
+const prepareInstanceContext = async function () {
+  await prepareInstance();
 };
+
+const prepareInstance = async () => {
+  if (isValidInstanceName(instance.value.name)) {
+    return instance.value;
+  }
+
+  const ins = await useInstanceV1Store().getOrFetchInstanceByName(
+    instanceName.value
+  );
+  return ins;
+};
+
+watchEffect(prepareInstanceContext);
 </script>

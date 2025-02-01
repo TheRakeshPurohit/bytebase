@@ -2,148 +2,77 @@
   <div class="textlabel">
     {{ $t("repository.choose-git-provider-description") }}
   </div>
-  <div class="mt-4 flex flex-wrap">
+  <div class="mt-4 flex flex-wrap space-x-2 gap-y-2">
     <template v-for="(vcs, index) in vcsList" :key="index">
-      <button
-        type="button"
-        class="btn-normal items-center space-x-2 mx-2 my-2"
-        @click.prevent="selectVCS(vcs)"
-      >
-        <template v-if="vcs.type.startsWith('GITLAB')">
-          <img class="h-6 w-auto" src="../assets/gitlab-logo.svg" />
+      <NButton type="default" @click.prevent="selectVCS(vcs)">
+        <template #icon>
+          <VCSIcon custom-class="h-6" :type="vcs.type" />
         </template>
-        <span>{{ vcs.name }}</span>
-      </button>
+        <span>{{ vcs.title }}</span>
+      </NButton>
     </template>
   </div>
-  <div class="mt-2 textinfolabel">
-    <template v-if="isCurrentUserOwner">
+  <div class="mt-4 textinfolabel">
+    <template v-if="canManageVCSProvider">
       <i18n-t keypath="repository.choose-git-provider-visit-workspace">
         <template #workspace>
-          <router-link class="normal-link" to="/setting/version-control"
-            >{{ $t("common.workspace") }} -
-            {{ $t("common.version-control") }}</router-link
+          <router-link
+            class="normal-link"
+            :to="{ name: WORKSPACE_ROUTE_GITOPS }"
           >
+            {{ $t("common.workspace") }} - {{ $t("common.gitops") }}
+          </router-link>
         </template>
       </i18n-t>
     </template>
     <template v-else>
-      {{ $t("repository.choose-git-provider-contact-workspace-owner") }}
+      {{ $t("repository.choose-git-provider-contact-workspace-admin") }}
     </template>
   </div>
 </template>
 
 <script lang="ts">
-import { useStore } from "vuex";
-import {
-  reactive,
-  computed,
-  PropType,
-  watchEffect,
-  onUnmounted,
-  onMounted,
-} from "vue";
-import isEmpty from "lodash-es/isEmpty";
-import {
-  OAuthConfig,
-  OAuthToken,
-  OAuthWindowEventPayload,
-  openWindowForOAuth,
-  ProjectRepositoryConfig,
-  redirectUrl,
-  VCS,
-} from "../types";
-import { isOwner } from "../utils";
+export default { name: "RepositoryVCSProviderPanel" };
+</script>
+
+<script setup lang="ts">
+import { reactive, computed, watchEffect } from "vue";
+import { hasWorkspacePermissionV2 } from "@/utils";
+import { useVCSProviderStore } from "@/store";
+import type { VCSProvider } from "@/types/proto/v1/vcs_provider_service";
+import { WORKSPACE_ROUTE_GITOPS } from "@/router/dashboard/workspaceRoutes";
+import { NButton } from "naive-ui";
+import { VCSIcon } from "./VCS";
 
 interface LocalState {
-  selectedVCS?: VCS;
+  selectedVCS?: VCSProvider;
 }
 
-export default {
-  name: "RepositoryVCSProviderPanel",
-  props: {
-    config: {
-      required: true,
-      type: Object as PropType<ProjectRepositoryConfig>,
-    },
-  },
-  emits: ["next"],
-  setup(props, { emit }) {
-    const store = useStore();
-    const state = reactive<LocalState>({});
+const emit = defineEmits<{
+  (event: "next"): void;
+  (event: "set-vcs", payload: VCSProvider): void;
+}>();
 
-    const currentUser = computed(() => store.getters["auth/currentUser"]());
+const vcsV1Store = useVCSProviderStore();
+const state = reactive<LocalState>({});
 
-    const prepareVCSList = () => {
-      store.dispatch("vcs/fetchVCSList");
-    };
+const prepareVCSList = () => {
+  vcsV1Store.getOrFetchVCSList();
+};
 
-    watchEffect(prepareVCSList);
+watchEffect(prepareVCSList);
 
-    onMounted(() => {
-      window.addEventListener(
-        "bb.oauth.link-vcs-repository",
-        eventListener,
-        false
-      );
-    });
-    onUnmounted(() => {
-      window.removeEventListener("bb.oauth.link-vcs-repository", eventListener);
-    });
+const vcsList = computed(() => {
+  return vcsV1Store.vcsList;
+});
 
-    const vcsList = computed(() => {
-      return store.getters["vcs/vcsList"]();
-    });
+const canManageVCSProvider = computed(() => {
+  return hasWorkspacePermissionV2("bb.vcsProviders.list");
+});
 
-    const eventListener = (event: Event) => {
-      const payload = (event as CustomEvent).detail as OAuthWindowEventPayload;
-      if (isEmpty(payload.error)) {
-        props.config.code = payload.code;
-        const oAuthConfig: OAuthConfig = {
-          endpoint: `${state.selectedVCS!.instanceUrl}/oauth/token`,
-          applicationId: state.selectedVCS!.applicationId,
-          secret: state.selectedVCS!.secret,
-          redirectUrl: redirectUrl(),
-        };
-        store
-          .dispatch("gitlab/exchangeToken", {
-            oAuthConfig,
-            code: payload.code,
-          })
-          .then((token: OAuthToken) => {
-            props.config.vcs = state.selectedVCS!;
-            props.config.token = token;
-            emit("next");
-          });
-      } else {
-        store.dispatch("notification/pushNotification", {
-          module: "bytebase",
-          style: "CRITICAL",
-          title: payload.error,
-        });
-      }
-    };
-
-    const isCurrentUserOwner = computed(() => {
-      return isOwner(currentUser.value.role);
-    });
-
-    const selectVCS = (vcs: VCS) => {
-      state.selectedVCS = vcs;
-      openWindowForOAuth(
-        `${vcs.instanceUrl}/oauth/authorize`,
-        vcs.applicationId,
-        "bb.oauth.link-vcs-repository"
-      );
-    };
-
-    return {
-      state,
-      currentUser,
-      vcsList,
-      isCurrentUserOwner,
-      selectVCS,
-    };
-  },
+const selectVCS = (vcs: VCSProvider) => {
+  state.selectedVCS = vcs;
+  emit("set-vcs", vcs);
+  emit("next");
 };
 </script>

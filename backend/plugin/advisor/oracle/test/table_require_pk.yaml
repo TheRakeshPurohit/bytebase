@@ -1,0 +1,38 @@
+- statement: CREATE TABLE abc.t(id INT PRIMARY KEY);
+  changeType: 0
+- statement: CREATE TABLE t(id INT, PRIMARY KEY (id))
+  changeType: 0
+- statement: CREATE TABLE "TEST_DB".t(id INT)
+  changeType: 0
+  want:
+    - status: 2
+      code: 601
+      title: table.require-pk
+      content: Table "TEST_DB"."T" requires PRIMARY KEY.
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE t(id INT);
+                DROP TABLE t
+  changeType: 0
+- statement: |-
+    CREATE TABLE t(id INT);
+    ALTER TABLE t ADD CONSTRAINT tpk PRIMARY KEY (id)
+  changeType: 0
+- statement: |-
+    CREATE TABLE t(id INT PRIMARY KEY);
+    ALTER TABLE t DROP PRIMARY KEY
+  changeType: 0
+  want:
+    - status: 2
+      code: 601
+      title: table.require-pk
+      content: Table "TEST_DB"."T" requires PRIMARY KEY.
+      detail: ""
+      startposition:
+        line: 2
+        column: 0
+      endposition: null

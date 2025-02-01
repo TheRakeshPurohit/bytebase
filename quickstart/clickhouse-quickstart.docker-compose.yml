@@ -1,8 +1,8 @@
-version: '3.7'
+version: "3.7"
 
 services:
   bb:
-    image: bytebase/bytebase:1.0.0
+    image: bytebase/bytebase:${BB_VERSION}
     init: true
     container_name: bytebase
     restart: always
@@ -11,18 +11,10 @@ services:
     # # Uncomment the following lines to persist data
     # volumes:
     #   - ~/.bytebase/data:/var/opt/bytebase
-    command:
-      [
-        "--data",
-        "/var/opt/bytebase",
-        "--host",
-        "http://localhost",
-        "--port",
-        "8080"
-      ]
+    command: ["--data", "/var/opt/bytebase", "--port", "8080"]
 
   clickhouse-db:
-    image: yandex/clickhouse-server
+    image: clickhouse/clickhouse-server
     platform: linux/amd64
     ulimits:
       nofile:

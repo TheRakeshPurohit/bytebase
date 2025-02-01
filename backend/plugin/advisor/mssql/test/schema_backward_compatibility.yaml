@@ -1,0 +1,159 @@
+- statement: EXEC sp_rename N'Phone', N'Telephone', N'USERDATATYPE';
+  changeType: 0
+  want:
+    - status: 2
+      code: 102
+      title: schema.backward-compatibility
+      content: sp_rename may cause incompatibility with the existing data and code, and break scripts and stored procedures.
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: DROP TABLE MyTable;
+  changeType: 0
+  want:
+    - status: 2
+      code: 112
+      title: schema.backward-compatibility
+      content: Drop table master.dbo.MyTable may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE MyTable(Id INT PRIMARY KEY);
+    DROP TABLE MyTable;
+  changeType: 0
+- statement: DROP SCHEMA MySchema;
+  changeType: 0
+  want:
+    - status: 2
+      code: 112
+      title: schema.backward-compatibility
+      content: Drop schema master.myschema may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE SCHEMA AUTHORIZATION dbo;
+    DROP SCHEMA dbo;
+  changeType: 0
+- statement: DROP DATABASE MyDB;
+  changeType: 0
+  want:
+    - status: 2
+      code: 112
+      title: schema.backward-compatibility
+      content: Drop database mydb may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE DATABASE MyDB;
+    DROP DATABASE MyDB;
+  changeType: 0
+- statement: |-
+    ALTER TABLE MyTable DROP COLUMN MyColumnOne, MyColumnTwo;
+    ALTER TABLE MyTable ALTER COLUMN MyColumnOne INT NOT NULL;
+    ALTER TABLE MyTable ADD PRIMARY KEY (MyColumnOne, MyColumnTwo);
+    ALTER TABLE MyTable ADD UNIQUE (MyColumnOne, MyColumnTwo);
+    ALTER TABLE MyTable ADD CHECK NOT FOR REPLICATION (MyColumnOne > 0);
+    ALTER TABLE MyTable WITH NOCHECK ADD CONSTRAINT MyConstraint CHECK (MyColumnOne > 0);
+    ALTER TABLE MyTable WITH CHECK ADD CONSTRAINT MyConstraint CHECK (MyColumnOne > 0);
+    ALTER TABLE MyTable WITH NOCHECK ADD FOREIGN KEY (MyColumnOne) REFERENCES MyTableTwo(MyColumnTwo);
+    ALTER TABLE MyTable WITH CHECK ADD FOREIGN KEY (MyColumnOne) REFERENCES MyTableTwo(MyColumnTwo);
+  changeType: 0
+  want:
+    - status: 2
+      code: 112
+      title: schema.backward-compatibility
+      content: Drop column mycolumnone, mycolumntwo may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+    - status: 2
+      code: 111
+      title: schema.backward-compatibility
+      content: Alter COLUMN mycolumnone may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 2
+        column: 0
+      endposition: null
+    - status: 2
+      code: 106
+      title: schema.backward-compatibility
+      content: Add PRIMARY KEY may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 3
+        column: 0
+      endposition: null
+    - status: 2
+      code: 107
+      title: schema.backward-compatibility
+      content: Add UNIQUE KEY may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 4
+        column: 0
+      endposition: null
+    - status: 2
+      code: 109
+      title: schema.backward-compatibility
+      content: Add CHECK may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 5
+        column: 0
+      endposition: null
+    - status: 2
+      code: 108
+      title: schema.backward-compatibility
+      content: Add CHECK WITH NO CHECK may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 6
+        column: 0
+      endposition: null
+    - status: 2
+      code: 108
+      title: schema.backward-compatibility
+      content: Add FOREIGN KEY WITH NO CHECK may cause incompatibility with the existing data and code
+      detail: ""
+      startposition:
+        line: 8
+        column: 0
+      endposition: null
+- statement: EXEC sp_rename 'Sales.SalesTerritory', 'SalesTerr';
+  changeType: 0
+  want:
+    - status: 2
+      code: 102
+      title: schema.backward-compatibility
+      content: sp_rename may cause incompatibility with the existing data and code, and break scripts and stored procedures.
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: EXEC sp_rename 'dbo.ErrorLog.ErrorTime', 'ErrorDateTime', 'COLUMN';
+  changeType: 0
+  want:
+    - status: 2
+      code: 102
+      title: schema.backward-compatibility
+      content: sp_rename may cause incompatibility with the existing data and code, and break scripts and stored procedures.
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

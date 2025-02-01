@@ -1,16 +1,100 @@
-import isUndefined from "lodash-es/isUndefined";
-
-const COLLAPSE_MODULE = "ui.list.collapse";
-const INTRO_MODULE = "ui.intro";
+import { isUndefined } from "lodash-es";
+import { defineStore } from "pinia";
+import { computed, reactive } from "vue";
+import { useCurrentUserV1 } from "@/store";
+import { useDynamicLocalStorage } from "@/utils";
 
 export interface UIState {
   collapseStateByKey: Map<string, boolean>;
   introStateByKey: Map<string, boolean>;
 }
 
-const state: () => UIState = () => ({
-  collapseStateByKey: new Map(),
-  introStateByKey: new Map(),
+export const useUIStateStore = defineStore("uistate", () => {
+  const state = reactive<UIState>({
+    collapseStateByKey: new Map(),
+    introStateByKey: new Map(),
+  });
+  const currentUser = useCurrentUserV1();
+
+  const COLLAPSE_MODULE_KEY = computed(
+    () => `ui.list.collapse.${currentUser.value.name}`
+  );
+  const INTRO_MODULE_KEY = computed(() => `ui.intro.${currentUser.value.name}`);
+  const EDITOR_FORMAT_MODULE_KEY = computed(
+    () => `ui.state.editor.format-statement-on-save.${currentUser.value.name}`
+  );
+
+  // default to false
+  const editorFormatStatementOnSave = useDynamicLocalStorage<boolean>(
+    EDITOR_FORMAT_MODULE_KEY,
+    false
+  );
+
+  const getIntroStateByKey = (key: string): boolean => {
+    return stateByKey(state.introStateByKey, INTRO_MODULE_KEY.value, key);
+  };
+
+  const setCollapseState = (fullState: any) => {
+    const newMap = new Map();
+    for (const key in fullState) {
+      newMap.set(key, fullState[key]);
+    }
+    state.collapseStateByKey = newMap;
+  };
+
+  const setIntroState = (fullState: any) => {
+    const newMap = new Map();
+    for (const key in fullState) {
+      newMap.set(key, fullState[key]);
+    }
+    state.introStateByKey = newMap;
+  };
+
+  const setIntroStateByKey = ({
+    key,
+    newState,
+  }: {
+    key: string;
+    newState: boolean;
+  }) => {
+    state.introStateByKey.set(key, newState);
+  };
+
+  const setEditorFormatStatementOnSave = (value: boolean) => {
+    editorFormatStatementOnSave.value = value;
+  };
+
+  const restoreState = () => {
+    const storedCollapseState = localStorage.getItem(COLLAPSE_MODULE_KEY.value);
+    const collapseState = storedCollapseState
+      ? JSON.parse(storedCollapseState)
+      : {};
+    setCollapseState(collapseState);
+
+    const storedIntroState = localStorage.getItem(INTRO_MODULE_KEY.value);
+    const introState = storedIntroState ? JSON.parse(storedIntroState) : {};
+    setIntroState(introState);
+  };
+
+  const saveIntroStateByKey = async ({
+    key,
+    newState,
+  }: {
+    key: string;
+    newState: boolean;
+  }) => {
+    const state = saveStateByKey(INTRO_MODULE_KEY.value, key, newState);
+    setIntroStateByKey({ key, newState });
+    return state;
+  };
+
+  return {
+    saveIntroStateByKey,
+    restoreState,
+    setEditorFormatStatementOnSave,
+    getIntroStateByKey,
+    editorFormatStatementOnSave,
+  };
 });
 
 const stateByKey = function (
@@ -39,114 +123,4 @@ const saveStateByKey = function (
   fullState[key] = state;
   localStorage.setItem(module, JSON.stringify(fullState));
   return fullState[key];
-};
-
-const getters = {
-  collapseStateByKey:
-    (state: UIState) =>
-    (key: string): boolean => {
-      return stateByKey(state.collapseStateByKey, COLLAPSE_MODULE, key);
-    },
-
-  introStateByKey:
-    (state: UIState) =>
-    (key: string): boolean => {
-      return stateByKey(state.introStateByKey, INTRO_MODULE, key);
-    },
-};
-
-const actions = {
-  async restoreState({ commit }: any) {
-    const storedCollapseState = localStorage.getItem(COLLAPSE_MODULE);
-    const collapseState = storedCollapseState
-      ? JSON.parse(storedCollapseState)
-      : {};
-    commit("setCollapseState", collapseState);
-
-    const storedIntroState = localStorage.getItem(INTRO_MODULE);
-    const introState = storedIntroState ? JSON.parse(storedIntroState) : {};
-    commit("setIntroState", introState);
-  },
-
-  async savecollapseStateByKey(
-    { commit }: any,
-    {
-      key,
-      collapse,
-    }: {
-      key: string;
-      collapse: boolean;
-    }
-  ) {
-    const state = saveStateByKey(COLLAPSE_MODULE, key, collapse);
-    commit("setcollapseStateByKey", { key, collapse: state });
-    return state;
-  },
-
-  async saveIntroStateByKey(
-    { commit }: any,
-    {
-      key,
-      newState,
-    }: {
-      key: string;
-      newState: boolean;
-    }
-  ) {
-    const state = saveStateByKey(INTRO_MODULE, key, newState);
-    commit("setIntroStateByKey", { key, newState });
-    return state;
-  },
-};
-
-const mutations = {
-  setCollapseState(state: UIState, fullState: any) {
-    const newMap = new Map();
-    for (const key in fullState) {
-      newMap.set(key, fullState[key]);
-    }
-    state.collapseStateByKey = newMap;
-  },
-
-  setcollapseStateByKey(
-    state: UIState,
-    {
-      key,
-      collapse,
-    }: {
-      key: string;
-      collapse: boolean;
-    }
-  ) {
-    state.collapseStateByKey.set(key, collapse);
-  },
-
-  setIntroState(state: UIState, fullState: any) {
-    const newMap = new Map();
-    for (const key in fullState) {
-      newMap.set(key, fullState[key]);
-    }
-    state.introStateByKey = newMap;
-  },
-
-  setIntroStateByKey(
-    state: UIState,
-    {
-      key,
-      newState,
-    }: {
-      key: string;
-      newState: boolean;
-    }
-  ) {
-    state.introStateByKey.set(key, newState);
-  },
-};
-
-export default {
-  namespaced: true,
-  state,
-  getters,
-  actions,
-  mutations,
 };

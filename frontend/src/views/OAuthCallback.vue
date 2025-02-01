@@ -1,88 +1,120 @@
 <template>
   <div class="p-4">
-    <div>{{ state.message }}</div>
-    <button
-      v-if="state.hasError"
-      type="button"
-      class="btn-normal mt-2"
-      @click.prevent="window.close()"
-    >
-      Close
-    </button>
+    <div v-if="state.hasError" class="mt-2">
+      <div>{{ state.message }}</div>
+      <NButton v-if="state.oAuthState?.popup" @click="window.close()">
+        Close
+      </NButton>
+      <router-link v-else :to="{ name: AUTH_SIGNIN_MODULE }" class="btn-normal">
+        Back to Sign in
+      </router-link>
+    </div>
   </div>
 </template>
 
-<script lang="ts">
-import { reactive } from "vue";
-import { useRouter } from "vue-router";
-import {
-  OAuthStateSessionKey,
-  OAuthWindowEventPayload,
-  OAuthType,
-} from "../types";
+<script lang="ts" setup>
+import { NButton } from "naive-ui";
+import { parse } from "qs";
+import { onMounted, reactive } from "vue";
+import { useRoute } from "vue-router";
+import { AUTH_SIGNIN_MODULE } from "@/router/auth";
+import { useAuthStore } from "@/store";
+import type { OAuthState, OAuthWindowEventPayload } from "../types";
 
 interface LocalState {
   message: string;
   hasError: boolean;
+  oAuthState: OAuthState | undefined;
+  payload: OAuthWindowEventPayload;
 }
 
-export default {
-  name: "OAuthCallback",
-  setup() {
-    const router = useRouter();
+const route = useRoute();
+const authStore = useAuthStore();
 
-    const state = reactive<LocalState>({
-      message: "",
-      hasError: false,
-    });
-
-    const payload: OAuthWindowEventPayload = {
-      error: "",
-      code: "",
-    };
-
-    const expectedState = sessionStorage.getItem(OAuthStateSessionKey);
-    let eventType = undefined;
-
-    if (
-      !expectedState ||
-      expectedState != router.currentRoute.value.query.state
-    ) {
-      state.hasError = true;
-      state.message =
-        "Failed to authorize. Invalid state passed to the oauth callback.";
-      payload.error = state.message;
-    } else {
-      state.message =
-        "Successfully authorized. Redirecting back to the application...";
-      payload.code = router.currentRoute.value.query.code as string;
-
-      eventType = expectedState.slice(0, expectedState.lastIndexOf("-"));
-    }
-
-    switch (eventType as OAuthType) {
-      case "bb.oauth.signin":
-      case "bb.oauth.register-vcs":
-      case "bb.oauth.link-vcs-repository":
-        window.opener.dispatchEvent(
-          new CustomEvent(eventType as OAuthType, {
-            detail: payload,
-          })
-        );
-        break;
-      default:
-        window.opener.dispatchEvent(
-          new CustomEvent("bb.oauth.unknown", {
-            detail: payload,
-          })
-        );
-    }
-
-    window.close();
-
-    return {
-      state,
-    };
+const state = reactive<LocalState>({
+  message: "",
+  hasError: false,
+  oAuthState: undefined,
+  payload: {
+    error: "",
+    code: "",
   },
+});
+
+onMounted(() => {
+  const queryState = parse((route.query.state as string) || "");
+
+  if (queryState.event) {
+    state.oAuthState = {
+      event: queryState.event as string,
+      popup: queryState.popup === "true" ? true : false,
+      redirect: (queryState.redirect as string) || "",
+    };
+    state.hasError = false;
+    state.message = "Successfully authorized. Redirecting back to Bytebase...";
+    state.payload.code = (route.query.code as string) || "";
+  } else {
+    state.hasError = true;
+    state.message =
+      "Failed to authorize. Invalid state passed to the oauth callback.";
+    state.oAuthState = undefined;
+  }
+
+  triggerAuthCallback();
+});
+
+const triggerAuthCallback = async () => {
+  const { oAuthState, hasError } = state;
+  if (hasError || !oAuthState) {
+    window.opener.dispatchEvent(
+      new CustomEvent("bb.oauth.unknown", {
+        detail: state.payload,
+      })
+    );
+    return;
+  }
+
+  const eventName = oAuthState.event;
+  const eventType = eventName.slice(0, eventName.lastIndexOf("."));
+  if (eventName.startsWith("bb.oauth.signin")) {
+    if (oAuthState.popup) {
+      window.opener.dispatchEvent(
+        new CustomEvent(eventName, {
+          detail: state.payload,
+        })
+      );
+      window.close();
+    } else {
+      await authStore.login(
+        {
+          idpName: eventName.split(".").pop()!,
+          idpContext: {
+            oauth2Context: {
+              code: state.payload.code,
+            },
+          },
+          web: true,
+        },
+        oAuthState.redirect
+      );
+    }
+  } else if (
+    eventName.startsWith("bb.oauth.register-vcs") ||
+    eventName.startsWith("bb.oauth.link-vcs-repository")
+  ) {
+    window.opener.dispatchEvent(
+      new CustomEvent(eventType, {
+        detail: state.payload,
+      })
+    );
+    window.close();
+  } else {
+    window.opener.dispatchEvent(
+      new CustomEvent("bb.oauth.unknown", {
+        detail: state.payload,
+      })
+    );
+    window.close();
+  }
 };
 </script>

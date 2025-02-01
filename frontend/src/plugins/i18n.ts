@@ -1,36 +1,68 @@
-import { App } from "vue";
-import { createI18n } from "vue-i18n";
 import { useLocalStorage } from "@vueuse/core";
+import { createI18n, type Composer } from "vue-i18n";
+import { mergedLocalMessage } from "./i18n-messages";
 
-const localPathPrefix = "../locales/";
+export interface LanguageStorage {
+  appearance: {
+    language: string;
+  };
+}
 
-const storage = useLocalStorage("bytebase_options", {}) as any;
-const locale = storage.value?.appearance?.language || navigator.language;
+const validLocaleList = ["en-US", "zh-CN", "es-ES", "ja-JP"];
 
-// import i18n resources
-// https://vitejs.dev/guide/features.html#glob-import
-const messages = Object.fromEntries(
-  Object.entries(import.meta.globEager("../locales/*.y(a)?ml")).map(
-    ([key, value]) => {
-      const yaml = key.endsWith(".yaml");
-      return [key.slice(localPathPrefix.length, yaml ? -5 : -4), value.default];
-    }
-  )
-);
+const getValidLocale = () => {
+  const storage = useLocalStorage<LanguageStorage>("bytebase_options", {
+    appearance: {
+      language: "",
+    },
+  });
+
+  const params = new URL(globalThis.location.href).searchParams;
+  let locale = params.get("locale") || "";
+  if (validLocaleList.includes(locale)) {
+    storage.value = {
+      appearance: {
+        language: locale,
+      },
+    };
+  }
+
+  locale = storage.value?.appearance?.language || "";
+  if (validLocaleList.includes(locale)) {
+    return locale;
+  }
+
+  locale = navigator.language;
+  if (locale === "en") {
+    // To work with user stored legacy preferences, we switch to en-US
+    // here if we got "en" from localStorage
+    locale = "en-US";
+  }
+  if (locale === "ja") {
+    locale = "ja-JP";
+  }
+  if (locale === "es") {
+    locale = "es-ES";
+  }
+  if (validLocaleList.includes(locale)) {
+    return locale;
+  }
+
+  return "en-US";
+};
 
 const i18n = createI18n({
   legacy: false,
-  locale,
+  locale: getValidLocale(),
   globalInjection: true,
-  messages,
+  messages: mergedLocalMessage,
+  fallbackLocale: "en-US",
 });
 
-export const t = i18n.global.t;
+export const t = i18n.global.t as Composer["t"];
 
-export const curLocale = i18n.global.locale;
+export const te = i18n.global.te as Composer["te"];
 
-const install = (app: App) => {
-  app.use(i18n);
-};
+export const locale = i18n.global.locale;
 
-export default install;
+export default i18n;

@@ -1,0 +1,74 @@
+- statement: |-
+    CREATE TABLE t(
+      name    VARCHAR,
+      "CONNECT" VARCHAR
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "CONNECT" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 2
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE t(
+      name      VARCHAR,
+      "connect" VARCHAR
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "connect" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 2
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE t(
+      name  VARCHAR,
+      age   INT
+    );
+  changeType: 0
+- statement: |-
+    CREATE TABLE mytable_copy (
+      name      INT,
+      "connect" INT
+    ) AS SELECT a + 1, b + 2 FROM mytable;
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "connect" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 2
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE mytable_copy (
+      name INT,
+      age  INT
+    ) AS SELECT a + 1, b + 2 FROM mytable;
+  changeType: 0
+- statement: ALTER TABLE mytable RENAME COLUMN name TO "connect";
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "connect" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: ALTER TABLE mytable RENAME COLUMN name TO age;
+  changeType: 0

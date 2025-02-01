@@ -1,5 +1,5 @@
-import { Parser, AST } from "node-sql-parser";
 import { isObject, isArray } from "lodash-es";
+import type { AST } from "node-sql-parser";
 
 type ParseResult = {
   data: AST | AST[] | null;
@@ -10,7 +10,9 @@ const DDL_TYPE = ["create", "alter", "drop"];
 const DML_TYPE = ["insert", "update", "delete"];
 const SELECT = "select";
 
-export const parseSQL = (sql: string): ParseResult => {
+export const parseSQL = async (sql: string): Promise<ParseResult> => {
+  const { Parser } = await import("node-sql-parser");
+
   if (sql === "") {
     return { data: [], error: null };
   }
@@ -46,35 +48,36 @@ export const isMultipleStatements = (data: ParseResult["data"]) => {
   return isArray(data) && data.length > 1;
 };
 
-export const isDDLStatement = (data: ParseResult["data"]) => {
+export const isDDLStatement = (
+  data: ParseResult["data"],
+  method: "every" | "some" = "every"
+) => {
   // if the sql statement is an object, it's a single sql statement
   if (isObject(data) && !isArray(data)) {
     return DDL_TYPE.includes(data.type.toLowerCase());
   }
   // if the sql statement is an array, it's a multiple sql statements
   if (isArray(data)) {
-    return data.every((statement) =>
+    return data[method]((statement) =>
       DDL_TYPE.includes(statement.type.toLowerCase())
     );
   }
 };
 
-export const isDMLStatement = (data: ParseResult["data"]) => {
+export const isDMLStatement = (
+  data: ParseResult["data"],
+  method: "every" | "some" = "every"
+) => {
   // if the sql statement is an object, it's a single sql statement
   if (isObject(data) && !isArray(data)) {
     return DML_TYPE.includes(data.type.toLowerCase());
   }
   // if the sql statement is an array, it's a multiple sql statements
   if (isArray(data)) {
-    return data.every((statement) =>
+    return data[method]((statement) =>
       DML_TYPE.includes(statement.type.toLowerCase())
     );
   }
-};
-
-export const transformSQL = (data: AST | AST[], database = "MySQL") => {
-  const parser = new Parser();
-  return parser.sqlify(data, { database });
 };
 
 export default parseSQL;

@@ -1,12 +1,12 @@
-import { RoleType, QuickActionType } from "./types";
+import type { Permission } from "./types";
 
 export {};
 
 declare module "vue-router" {
   interface RouteMeta {
     title?: (route: RouteLocationNormalized) => string;
-    quickActionListByRole?: (
-      route: RouteLocationNormalized
-    ) => Map<RoleType, QuickActionType[]>;
+    overrideTitle?: boolean;
+    requiredWorkspacePermissionList?: () => Permission[];
+    requiredProjectPermissionList?: () => Permission[];
   }
 }

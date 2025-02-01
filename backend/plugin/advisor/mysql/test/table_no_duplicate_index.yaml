@@ -1,0 +1,142 @@
+- statement: |-
+    CREATE TABLE customers (
+      id INT PRIMARY KEY,
+      first_name VARCHAR(50),
+      last_name VARCHAR(50),
+      email VARCHAR(100),
+      INDEX idx_email (email),
+      INDEX idx_name (last_name, first_name)
+    );
+  changeType: 0
+- statement: |-
+    CREATE TABLE orders (
+      id INT PRIMARY KEY,
+      order_number INT,
+      customer_id INT,
+      INDEX (customer_id),
+      INDEX (order_number),
+      UNIQUE (customer_id)
+    );
+  changeType: 0
+- statement: |-
+    CREATE TABLE users (
+      id INT PRIMARY KEY,
+      username VARCHAR(50),
+      email VARCHAR(100),
+      INDEX idx_username (username),
+      INDEX idx_email (email),
+      INDEX idx_username_duplicate (username)
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 815
+      title: table.no-duplicate-index
+      content: '`users` has duplicate index `idx_username_duplicate`'
+      detail: ""
+      startposition:
+        line: 7
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE orders (
+      id INT PRIMARY KEY,
+      order_number INT,
+      customer_id INT,
+      INDEX (customer_id),
+      INDEX (order_number),
+      INDEX (customer_id)
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 815
+      title: table.no-duplicate-index
+      content: '`orders` has duplicate index ``'
+      detail: ""
+      startposition:
+        line: 7
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE orders (
+      id INT PRIMARY KEY,
+      order_number INT,
+      customer_id INT,
+      INDEX idx_customer_id (customer_id),
+      INDEX idx_order_number (order_number),
+      FOREIGN KEY (customer_id) REFERENCES customers(id)
+    );
+    ALTER TABLE orders ADD INDEX idx_duplicate (customer_id);
+  changeType: 0
+  want:
+    - status: 2
+      code: 815
+      title: table.no-duplicate-index
+      content: '`orders` has duplicate index `idx_duplicate`'
+      detail: ""
+      startposition:
+        line: 9
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE orders (
+        id INT PRIMARY KEY,
+        order_number INT,
+        customer_id INT
+    );
+    CREATE INDEX idx_customer_id ON orders (customer_id);
+    CREATE INDEX idx_customer_id_duplicate ON orders (customer_id);
+  changeType: 0
+  want:
+    - status: 2
+      code: 815
+      title: table.no-duplicate-index
+      content: '`orders` has duplicate index `idx_customer_id_duplicate`'
+      detail: ""
+      startposition:
+        line: 7
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE orders (
+        id INT PRIMARY KEY,
+        order_number INT,
+        customer VARCHAR(50)
+    );
+    CREATE INDEX idx_customer ON orders (customer, (order_number * 2));
+    CREATE INDEX idx_customer_duplicate ON orders (customer, (order_number * 2));
+  changeType: 0
+  want:
+    - status: 2
+      code: 815
+      title: table.no-duplicate-index
+      content: '`orders` has duplicate index `idx_customer_duplicate`'
+      detail: ""
+      startposition:
+        line: 7
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE orders (
+        id INT PRIMARY KEY,
+        order_number INT,
+        customer VARCHAR(50)
+    );
+    CREATE INDEX idx_customer_btree USING BTREE ON orders (customer);
+    CREATE INDEX idx_customer_hash USING HASH ON orders (customer);
+  changeType: 0
+- statement: |-
+    CREATE TABLE orders_sh (
+        id INT PRIMARY KEY,
+        order_number INT,
+        customer VARCHAR(50)
+    );
+    CREATE INDEX idx_customer_sh ON orders_sh (customer);
+    CREATE TABLE orders_bj (
+        id INT PRIMARY KEY,
+        order_number INT,
+        customer VARCHAR(50)
+    );
+    CREATE INDEX idx_customer_bj ON orders_bj (customer);
+  changeType: 0

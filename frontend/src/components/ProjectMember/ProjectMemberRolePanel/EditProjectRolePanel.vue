@@ -1,0 +1,299 @@
+<template>
+  <Drawer
+    :show="true"
+    width="auto"
+    @update:show="(show: boolean) => !show && $emit('close')"
+  >
+    <DrawerContent
+      :title="panelTitle"
+      :closable="true"
+      class="w-[64rem] max-w-[100vw] relative"
+    >
+      <div class="w-full flex flex-col justify-start items-start gap-y-4 pb-12">
+        <div class="w-full">
+          <p class="mb-2">
+            <span>{{ $t("project.members.condition-name") }}</span>
+          </p>
+          <NInput
+            v-model:value="state.title"
+            type="text"
+            :placeholder="displayRoleTitle(binding.role)"
+          />
+        </div>
+
+        <template v-if="!isLoading">
+          <div
+            v-if="
+              binding.role === PresetRoleType.SQL_EDITOR_USER ||
+              binding.role === PresetRoleType.PROJECT_EXPORTER
+            "
+            class="w-full"
+          >
+            <div class="flex items-center gap-x-1 mb-2">
+              <span>{{ $t("common.databases") }}</span>
+              <span class="text-red-600">*</span>
+            </div>
+            <QuerierDatabaseResourceForm
+              v-model:database-resources="state.databaseResources"
+              :project-name="project.name"
+              :include-cloumn="false"
+              :required-feature="'bb.feature.access-control'"
+            />
+          </div>
+
+          <!-- Exporter blocks -->
+          <template v-if="binding.role === PresetRoleType.PROJECT_EXPORTER">
+            <div class="w-full flex flex-col justify-start items-start">
+              <p class="mb-2">
+                {{ $t("issue.grant-request.export-rows") }}
+              </p>
+              <MaxRowCountSelect v-model:value="state.maxRowCount" />
+            </div>
+          </template>
+        </template>
+
+        <div class="w-full">
+          <p class="mb-2">{{ $t("common.description") }}</p>
+          <NInput
+            v-model:value="state.description"
+            type="textarea"
+            :placeholder="$t('project.members.role-description')"
+          />
+        </div>
+
+        <div class="w-full">
+          <p class="mb-2">{{ $t("common.expiration") }}</p>
+          <NDatePicker
+            v-model:value="state.expirationTimestamp"
+            style="width: 100%"
+            type="datetime"
+            :is-date-disabled="(date: number) => date < Date.now()"
+            clearable
+          />
+          <span v-if="!state.expirationTimestamp" class="textinfolabel">{{
+            $t("project.members.role-never-expires")
+          }}</span>
+        </div>
+
+        <MembersBindingSelect
+          :value="binding.members"
+          :disabled="true"
+          :required="true"
+          :allow-change-type="false"
+          :include-all-users="true"
+          :include-service-account="true"
+        />
+      </div>
+      <template #footer>
+        <div class="w-full flex flex-row justify-between items-center">
+          <div>
+            <BBButtonConfirm
+              v-if="allowRemoveRole()"
+              :type="'DELETE'"
+              :button-text="$t('common.delete')"
+              :require-confirm="true"
+              @confirm="handleDeleteRole"
+            />
+          </div>
+          <div class="flex items-center justify-end gap-x-2">
+            <NButton @click="$emit('close')">{{ $t("common.cancel") }}</NButton>
+            <NButton
+              type="primary"
+              :disabled="!allowConfirm"
+              @click="handleUpdateRole"
+            >
+              {{ $t("common.ok") }}
+            </NButton>
+          </div>
+        </div>
+      </template>
+    </DrawerContent>
+  </Drawer>
+</template>
+
+<script lang="ts" setup>
+import { cloneDeep, isEqual, isUndefined } from "lodash-es";
+import { NButton, NDatePicker, NInput } from "naive-ui";
+import { computed, reactive, ref, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
+import { BBButtonConfirm } from "@/bbkit";
+import QuerierDatabaseResourceForm from "@/components/GrantRequestPanel/DatabaseResourceForm/index.vue";
+import MaxRowCountSelect from "@/components/GrantRequestPanel/MaxRowCountSelect.vue";
+import MembersBindingSelect from "@/components/Member/MembersBindingSelect.vue";
+import { Drawer, DrawerContent } from "@/components/v2";
+import {
+  useProjectIamPolicy,
+  useProjectIamPolicyStore,
+  pushNotification,
+} from "@/store";
+import type { ComposedProject, DatabaseResource } from "@/types";
+import { PresetRoleType } from "@/types";
+import { Expr } from "@/types/proto/google/type/expr";
+import { State } from "@/types/proto/v1/common";
+import type { Binding } from "@/types/proto/v1/iam_policy";
+import { displayRoleTitle } from "@/utils";
+import { convertFromExpr } from "@/utils/issue/cel";
+import { stringifyDatabaseResources } from "@/utils/issue/cel";
+import { getBindingIdentifier } from "../utils";
+
+const props = defineProps<{
+  project: ComposedProject;
+  binding: Binding;
+}>();
+
+const emit = defineEmits<{
+  (event: "close"): void;
+}>();
+
+interface LocalState {
+  title: string;
+  description: string;
+  expirationTimestamp?: number;
+  // Querier and exporter options.
+  databaseResources?: DatabaseResource[];
+  // Exporter options.
+  maxRowCount: number;
+}
+
+const { t } = useI18n();
+
+const state = reactive<LocalState>({
+  title: "",
+  description: "",
+  maxRowCount: 1000,
+});
+const isLoading = ref(true);
+const projectResourceName = computed(() => props.project.name);
+const { policy: iamPolicy } = useProjectIamPolicy(projectResourceName);
+
+const panelTitle = computed(() => {
+  return displayRoleTitle(props.binding.role);
+});
+
+const allowRemoveRole = () => {
+  if (props.project.state === State.DELETED) {
+    return false;
+  }
+
+  // Don't allow to remove the role if the condition is empty.
+  // * No expiration time.
+  if (props.binding.condition?.expression === "") {
+    return false;
+  }
+
+  return true;
+};
+
+const allowConfirm = computed(() => {
+  if (
+    !isUndefined(state.databaseResources) &&
+    state.databaseResources.length === 0
+  ) {
+    return false;
+  }
+  // only allow update current single user.
+  return props.binding.members.length === 1;
+});
+
+onMounted(() => {
+  const binding = props.binding;
+  // Set the display title with the role name.
+  state.title = binding.condition?.title || "";
+  state.description = binding.condition?.description || "";
+
+  if (binding.parsedExpr) {
+    const conditionExpr = convertFromExpr(binding.parsedExpr);
+    if (conditionExpr.expiredTime) {
+      state.expirationTimestamp = new Date(conditionExpr.expiredTime).getTime();
+    }
+    if (conditionExpr.databaseResources) {
+      state.databaseResources = conditionExpr.databaseResources;
+    }
+    if (conditionExpr.rowLimit) {
+      state.maxRowCount = conditionExpr.rowLimit;
+    }
+  }
+
+  isLoading.value = false;
+});
+
+const handleDeleteRole = async () => {
+  const policy = cloneDeep(iamPolicy.value);
+  policy.bindings = policy.bindings.filter(
+    (binding) => !isEqual(binding, props.binding)
+  );
+  await useProjectIamPolicyStore().updateProjectIamPolicy(
+    projectResourceName.value,
+    policy
+  );
+  emit("close");
+};
+
+const handleUpdateRole = async () => {
+  const member = props.binding.members[0];
+  const newBinding = cloneDeep(props.binding);
+  if (!newBinding.condition) {
+    newBinding.condition = Expr.fromPartial({});
+  }
+  newBinding.condition.title = state.title;
+  newBinding.condition.description = state.description;
+  newBinding.members = [member];
+
+  const policy = cloneDeep(iamPolicy.value);
+  const oldBindingIndex = policy.bindings.findIndex(
+    (binding) =>
+      getBindingIdentifier(binding) === getBindingIdentifier(props.binding)
+  );
+
+  if (oldBindingIndex >= 0) {
+    policy.bindings[oldBindingIndex].members = policy.bindings[
+      oldBindingIndex
+    ].members.filter((m) => m !== member);
+    if (policy.bindings[oldBindingIndex].members.length === 0) {
+      policy.bindings.splice(oldBindingIndex, 1);
+    }
+  }
+
+  const expression: string[] = [];
+  if (state.expirationTimestamp) {
+    expression.push(
+      `request.time < timestamp("${new Date(
+        state.expirationTimestamp
+      ).toISOString()}")`
+    );
+  }
+  if (
+    props.binding.role === PresetRoleType.SQL_EDITOR_USER ||
+    props.binding.role === PresetRoleType.PROJECT_EXPORTER
+  ) {
+    if (state.databaseResources) {
+      expression.push(stringifyDatabaseResources(state.databaseResources));
+    }
+  }
+  if (props.binding.role === PresetRoleType.PROJECT_EXPORTER) {
+    if (state.maxRowCount) {
+      expression.push(`request.row_limit <= ${state.maxRowCount}`);
+    }
+  }
+  if (expression.length > 0) {
+    newBinding.condition.expression = expression.join(" && ");
+  } else {
+    newBinding.condition.expression = "";
+  }
+
+  policy.bindings.push(newBinding);
+
+  await useProjectIamPolicyStore().updateProjectIamPolicy(
+    projectResourceName.value,
+    policy
+  );
+
+  pushNotification({
+    module: "bytebase",
+    style: "SUCCESS",
+    title: t("common.updated"),
+  });
+
+  emit("close");
+};
+</script>

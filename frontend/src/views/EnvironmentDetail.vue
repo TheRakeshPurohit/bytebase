@@ -1,179 +1,213 @@
 <template>
-  <div class="py-2">
-    <ArchiveBanner v-if="state.environment.rowStatus == 'ARCHIVED'" />
+  <div v-if="state.environment.state == State.DELETED" class="mb-2 -mt-4">
+    <ArchiveBanner />
   </div>
+
   <EnvironmentForm
-    v-if="state.approvalPolicy && state.backupPolicy"
+    v-if="state.rolloutPolicy && state.environmentTier"
     :environment="state.environment"
-    :approval-policy="state.approvalPolicy"
-    :backup-policy="state.backupPolicy"
+    :rollout-policy="state.rolloutPolicy"
+    :environment-tier="state.environmentTier"
     @update="doUpdate"
     @archive="doArchive"
     @restore="doRestore"
     @update-policy="updatePolicy"
-  />
-  <FeatureModal
-    v-if="state.missingRequiredFeature != undefined"
-    :feature="state.missingRequiredFeature"
-    @cancel="state.missingRequiredFeature = undefined"
-  />
+  >
+    <EnvironmentFormBody
+      :features="features"
+      :hide-archive-restore="hideArchiveRestore"
+      class="w-full px-4 pb-2"
+      :class="bodyClass"
+    />
+    <EnvironmentFormButtons
+      class="sticky bottom-0 bg-white py-2 px-4 border-t border-block-border"
+      :class="buttonsClass"
+    />
+  </EnvironmentForm>
 </template>
 
-<script lang="ts">
-import { reactive, watchEffect } from "vue";
-import { useStore } from "vuex";
-import ArchiveBanner from "../components/ArchiveBanner.vue";
-import EnvironmentForm from "../components/EnvironmentForm.vue";
+<script lang="ts" setup>
+import { cloneDeep } from "lodash-es";
+import { reactive, watch, watchEffect } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
+import ArchiveBanner from "@/components/ArchiveBanner.vue";
 import {
+  EnvironmentForm,
+  Form as EnvironmentFormBody,
+  Buttons as EnvironmentFormButtons,
+} from "@/components/EnvironmentForm";
+import { ENVIRONMENT_V1_ROUTE_DETAIL } from "@/router/dashboard/environmentV1";
+import { ENVIRONMENT_V1_ROUTE_DASHBOARD } from "@/router/dashboard/workspaceRoutes";
+import { pushNotification } from "@/store";
+import { environmentNamePrefix } from "@/store/modules/v1/common";
+import { useEnvironmentV1Store } from "@/store/modules/v1/environment";
+import {
+  usePolicyV1Store,
+  getEmptyRolloutPolicy,
+} from "@/store/modules/v1/policy";
+import { unknownEnvironment } from "@/types";
+import { State } from "@/types/proto/v1/common";
+import type {
   Environment,
-  EnvironmentId,
-  EnvironmentPatch,
-  Policy,
+  EnvironmentTier,
+} from "@/types/proto/v1/environment_service";
+import type { Policy } from "@/types/proto/v1/org_policy_service";
+import {
   PolicyType,
-  FeatureType,
-  DefaultApporvalPolicy,
-  DefaultSchedulePolicy,
-} from "../types";
-import { idFromSlug } from "../utils";
+  PolicyResourceType,
+} from "@/types/proto/v1/org_policy_service";
+import { extractEnvironmentResourceName, type VueClass } from "@/utils";
 
 interface LocalState {
   environment: Environment;
   showArchiveModal: boolean;
-  approvalPolicy?: Policy;
-  backupPolicy?: Policy;
-  missingRequiredFeature?:
-    | "bb.feature.approval-policy"
-    | "bb.feature.backup-policy";
+  rolloutPolicy?: Policy;
+  environmentTier?: EnvironmentTier;
 }
 
-export default {
-  name: "EnvironmentDetail",
-  components: {
-    ArchiveBanner,
-    EnvironmentForm,
-  },
-  props: {
-    environmentSlug: {
-      required: true,
-      type: String,
-    },
-  },
-  emits: ["archive"],
-  setup(props, { emit }) {
-    const store = useStore();
+const props = defineProps<{
+  features?: InstanceType<typeof EnvironmentFormBody>["features"];
+  environmentName: string;
+  hideArchiveRestore?: boolean;
+  bodyClass?: VueClass;
+  buttonsClass?: VueClass;
+}>();
 
-    const state = reactive<LocalState>({
-      environment: store.getters["environment/environmentById"](
-        idFromSlug(props.environmentSlug)
-      ),
-      showArchiveModal: false,
+const emit = defineEmits(["archive"]);
+
+const { t } = useI18n();
+const router = useRouter();
+const environmentV1Store = useEnvironmentV1Store();
+const policyV1Store = usePolicyV1Store();
+
+const state = reactive<LocalState>({
+  environment:
+    environmentV1Store.getEnvironmentByName(
+      `${environmentNamePrefix}${props.environmentName}`
+    ) || unknownEnvironment(),
+  showArchiveModal: false,
+});
+
+const prepareEnvironment = async () => {
+  await environmentV1Store.getOrFetchEnvironmentByName(
+    `${environmentNamePrefix}${props.environmentName}`
+  );
+};
+
+watch(() => props.environmentName, prepareEnvironment, {
+  immediate: true,
+});
+
+const preparePolicy = () => {
+  policyV1Store
+    .fetchPolicies({
+      parent: state.environment.name,
+      resourceType: PolicyResourceType.ENVIRONMENT,
+    })
+    .then((policies) => {
+      const rolloutPolicy = policies.find(
+        (policy) => policy.type === PolicyType.ROLLOUT_POLICY
+      );
+      state.rolloutPolicy =
+        rolloutPolicy ||
+        getEmptyRolloutPolicy(
+          state.environment.name,
+          PolicyResourceType.ENVIRONMENT
+        );
     });
 
-    const preparePolicy = () => {
-      store
-        .dispatch("policy/fetchPolicyByEnvironmentAndType", {
-          environmentId: (state.environment as Environment).id,
-          type: "bb.policy.pipeline-approval",
-        })
-        .then((policy: Policy) => {
-          state.approvalPolicy = policy;
-        });
+  state.environmentTier = state.environment.tier;
+};
 
-      store
-        .dispatch("policy/fetchPolicyByEnvironmentAndType", {
-          environmentId: (state.environment as Environment).id,
-          type: "bb.policy.backup-plan",
-        })
-        .then((policy: Policy) => {
-          state.backupPolicy = policy;
-        });
-    };
+watchEffect(preparePolicy);
 
-    watchEffect(preparePolicy);
+const assignEnvironment = (environment: Environment) => {
+  state.environment = environment;
+};
 
-    const assignEnvironment = (environment: Environment) => {
-      state.environment = environment;
-    };
+const doUpdate = (environmentPatch: Environment) => {
+  const pendingUpdate = cloneDeep(state.environment);
+  if (environmentPatch.title !== pendingUpdate.title) {
+    pendingUpdate.title = environmentPatch.title;
+  }
+  if (environmentPatch.tier !== pendingUpdate.tier) {
+    pendingUpdate.tier = environmentPatch.tier;
+  }
+  if (environmentPatch.color !== pendingUpdate.color) {
+    pendingUpdate.color = environmentPatch.color;
+  }
 
-    const doUpdate = (environmentPatch: EnvironmentPatch) => {
-      store
-        .dispatch("environment/patchEnvironment", {
-          environmentId: idFromSlug(props.environmentSlug),
-          environmentPatch,
-        })
-        .then((environment) => {
-          assignEnvironment(environment);
-        });
-    };
+  environmentV1Store
+    .updateEnvironment(pendingUpdate)
+    .then((environment) => {
+      assignEnvironment(environment);
+    })
+    .then(() => {
+      pushNotification({
+        module: "bytebase",
+        style: "SUCCESS",
+        title: t("environment.successfully-updated-environment", {
+          name: state.environment.title,
+        }),
+      });
+    });
+};
 
-    const doArchive = (environment: Environment) => {
-      store
-        .dispatch("environment/patchEnvironment", {
-          environmentId: environment.id,
-          environmentPatch: {
-            rowStatus: "ARCHIVED",
-          },
-        })
-        .then((environment) => {
-          emit("archive", environment);
-          assignEnvironment(environment);
-        });
-    };
+const doArchive = (environment: Environment) => {
+  environmentV1Store.deleteEnvironment(environment.name).then(() => {
+    emit("archive", environment);
+    environment.state = State.DELETED;
+    assignEnvironment(environment);
+    router.replace({
+      name: ENVIRONMENT_V1_ROUTE_DETAIL,
+      params: {
+        environmentName: extractEnvironmentResourceName(environment.name),
+      },
+    });
+  });
+};
 
-    const doRestore = (environment: Environment) => {
-      store
-        .dispatch("environment/patchEnvironment", {
-          environmentId: environment.id,
-          environmentPatch: {
-            rowStatus: "NORMAL",
-          },
-        })
-        .then((environment) => {
-          assignEnvironment(environment);
-        });
-    };
+const doRestore = (environment: Environment) => {
+  environmentV1Store
+    .undeleteEnvironment(environment.name)
+    .then((environment) => {
+      assignEnvironment(environment);
+      const id = extractEnvironmentResourceName(environment.name);
+      router.replace({
+        name: ENVIRONMENT_V1_ROUTE_DASHBOARD,
+        hash: `#${id}`,
+      });
+    });
+};
 
-    const updatePolicy = (
-      environmentId: EnvironmentId,
-      type: PolicyType,
-      policy: Policy
-    ) => {
-      if (
-        type === "bb.policy.pipeline-approval" &&
-        policy.payload.value !== DefaultApporvalPolicy &&
-        !store.getters["subscription/feature"]("bb.feature.approval-policy")
-      ) {
-        state.missingRequiredFeature = "bb.feature.approval-policy";
-        return;
-      }
-      if (
-        type === "bb.policy.backup-plan" &&
-        policy.payload.schedule !== DefaultSchedulePolicy &&
-        !store.getters["subscription/feature"]("bb.feature.backup-policy")
-      ) {
-        state.missingRequiredFeature = "bb.feature.backup-policy";
-        return;
-      }
-      store
-        .dispatch("policy/upsertPolicyByEnvironmentAndType", {
-          environmentId,
-          type: type,
-          policyUpsert: {
-            payload: policy.payload,
-          },
-        })
-        .then((policy: Policy) => {
-          state.backupPolicy = policy;
-        });
-    };
+const success = () => {
+  pushNotification({
+    module: "bytebase",
+    style: "SUCCESS",
+    title: t("environment.successfully-updated-environment", {
+      name: state.environment.title,
+    }),
+  });
+};
 
-    return {
-      state,
-      doUpdate,
-      doArchive,
-      doRestore,
-      updatePolicy,
-    };
-  },
+const updatePolicy = async (params: {
+  environment: Environment;
+  policyType: PolicyType;
+  policy: Policy;
+}) => {
+  const { environment, policyType, policy } = params;
+
+  const updatedPolicy = await policyV1Store.upsertPolicy({
+    parentPath: environment.name,
+    policy,
+  });
+  switch (policyType) {
+    case PolicyType.ROLLOUT_POLICY:
+      state.rolloutPolicy = updatedPolicy;
+      break;
+  }
+
+  success();
 };
 </script>

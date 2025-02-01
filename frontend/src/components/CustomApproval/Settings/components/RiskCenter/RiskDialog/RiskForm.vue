@@ -1,0 +1,223 @@
+<template>
+  <div
+    class="w-[calc(100vw-8rem)] lg:max-w-[75vw] 2xl:max-w-[55vw] max-h-[calc(100vh-10rem)] flex flex-col"
+  >
+    <div class="flex-1 flex flex-col divide-y overflow-hidden">
+      <div class="flex items-start gap-x-4 mb-4">
+        <div class="space-y-2 flex-1">
+          <label class="block font-medium text-sm text-control">
+            {{ $t("common.name") }}
+          </label>
+          <NInput
+            v-model:value="state.risk.title"
+            :disabled="!allowAdmin"
+            :placeholder="$t('custom-approval.risk-rule.input-rule-name')"
+            @input="$emit('update')"
+          />
+        </div>
+        <div class="space-y-2">
+          <label class="block font-medium text-sm text-control">
+            {{ $t("custom-approval.risk-rule.risk.self") }}
+          </label>
+          <RiskLevelSelect
+            v-model:value="state.risk.level"
+            :disabled="!allowAdmin"
+            @update:value="$emit('update')"
+          />
+        </div>
+        <div class="space-y-2">
+          <label class="block font-medium text-sm text-control">
+            {{ $t("custom-approval.risk-rule.source.self") }}
+          </label>
+          <RiskSourceSelect
+            v-model:value="state.risk.source"
+            :disabled="mode === 'EDIT' || !allowAdmin"
+            @update:value="$emit('update')"
+          />
+        </div>
+      </div>
+
+      <div class="flex-1 flex items-stretch gap-x-4 overflow-hidden">
+        <div class="flex-1 space-y-2 py-4 overflow-x-hidden overflow-y-auto">
+          <h3 class="font-medium text-sm text-control">
+            {{ $t("cel.condition.self") }}
+          </h3>
+          <div class="text-sm text-control-light">
+            {{ $t("cel.condition.description-tips") }}
+            <LearnMoreLink
+              url="https://www.bytebase.com/docs/administration/risk-center/#configuration?source=console"
+              class="ml-1"
+            />
+          </div>
+          <ExprEditor
+            :expr="state.expr"
+            :allow-admin="allowAdmin"
+            :factor-list="getFactorList(state.risk.source)"
+            :factor-support-dropdown="factorSupportDropdown"
+            :factor-options-map="getFactorOptionsMap(state.risk.source)"
+            @update="$emit('update')"
+          />
+        </div>
+
+        <div
+          v-if="allowAdmin"
+          class="w-[45%] max-w-[40rem] overflow-y-auto py-4 shrink-0"
+        >
+          <h3 class="font-medium text-sm text-control mb-2">
+            {{ $t("custom-approval.risk-rule.template.templates") }}
+          </h3>
+          <RuleTemplateTable
+            :dirty="dirty"
+            @apply-template="handleApplyRuleTemplate"
+          />
+        </div>
+      </div>
+    </div>
+    <footer
+      v-if="allowAdmin"
+      class="flex items-center justify-end gap-x-2 pt-4 border-t"
+    >
+      <NButton @click="$emit('cancel')">{{ $t("common.cancel") }}</NButton>
+      <NButton
+        type="primary"
+        :disabled="!allowCreateOrUpdate"
+        @click="handleUpsert"
+      >
+        {{ mode === "CREATE" ? $t("common.add") : $t("common.update") }}
+      </NButton>
+    </footer>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import { cloneDeep, head } from "lodash-es";
+import { NButton, NInput } from "naive-ui";
+import { computed, ref, watch } from "vue";
+import ExprEditor from "@/components/ExprEditor";
+import LearnMoreLink from "@/components/LearnMoreLink.vue";
+import type { ConditionGroupExpr, SimpleExpr } from "@/plugins/cel";
+import {
+  resolveCELExpr,
+  buildCELExpr,
+  wrapAsGroup,
+  validateSimpleExpr,
+  emptySimpleExpr,
+} from "@/plugins/cel";
+import { Expr } from "@/types/proto/google/type/expr";
+import { Risk } from "@/types/proto/v1/risk_service";
+import {
+  batchConvertCELStringToParsedExpr,
+  batchConvertParsedExprToCELString,
+  hasWorkspacePermissionV2,
+} from "@/utils";
+import {
+  getFactorList,
+  getFactorOptionsMap,
+  factorSupportDropdown,
+} from "../../common/utils";
+import { useRiskCenterContext } from "../context";
+import RiskLevelSelect from "./RiskLevelSelect.vue";
+import RiskSourceSelect from "./RiskSourceSelect.vue";
+import RuleTemplateTable from "./RuleTemplateTable.vue";
+
+type LocalState = {
+  risk: Risk;
+  expr: ConditionGroupExpr;
+};
+
+const props = defineProps<{
+  dirty?: boolean;
+}>();
+
+const emit = defineEmits<{
+  (event: "cancel"): void;
+  (event: "update"): void;
+  (event: "save", risk: Risk): void;
+}>();
+
+const context = useRiskCenterContext();
+const { allowAdmin } = context;
+
+const state = ref<LocalState>({
+  risk: Risk.fromPartial({}),
+  expr: wrapAsGroup(emptySimpleExpr()),
+});
+const mode = computed(() => context.dialog.value?.mode ?? "CREATE");
+
+const resolveLocalState = async () => {
+  const risk = cloneDeep(context.dialog.value!.risk);
+
+  let expr: SimpleExpr = emptySimpleExpr();
+  if (risk.condition?.expression) {
+    const parsedExprs = await batchConvertCELStringToParsedExpr([
+      risk.condition.expression,
+    ]);
+    const celExpr = head(parsedExprs);
+    if (celExpr) {
+      expr = resolveCELExpr(celExpr);
+    }
+  }
+
+  state.value = {
+    risk,
+    expr: wrapAsGroup(expr),
+  };
+};
+
+const allowCreateOrUpdate = computed(() => {
+  // Check create or update permission.
+  if (mode.value === "CREATE") {
+    if (!hasWorkspacePermissionV2("bb.risks.create")) {
+      return false;
+    }
+  } else if (mode.value === "EDIT") {
+    if (!hasWorkspacePermissionV2("bb.risks.update")) {
+      return false;
+    }
+    if (!props.dirty) return false;
+  }
+
+  const { risk, expr } = state.value;
+  if (!risk.title.trim()) return false;
+  if (!expr) return false;
+
+  if (!validateSimpleExpr(expr)) {
+    return false;
+  }
+
+  return true;
+});
+
+const handleUpsert = async () => {
+  if (!context.hasFeature.value) {
+    context.showFeatureModal.value = true;
+    return;
+  }
+  if (!state.value.expr) return;
+
+  const risk = cloneDeep(state.value.risk);
+
+  const celexpr = await buildCELExpr(state.value.expr);
+  if (!celexpr) {
+    return;
+  }
+  const expressions = await batchConvertParsedExprToCELString([celexpr]);
+  risk.condition = Expr.fromPartial({
+    expression: expressions[0],
+  });
+  emit("save", risk);
+};
+
+const handleApplyRuleTemplate = (
+  overrides: Partial<Risk>,
+  expr: ConditionGroupExpr
+) => {
+  Object.assign(state.value.risk, overrides);
+  state.value.expr = cloneDeep(expr);
+  emit("update");
+};
+
+watch(() => context.dialog, resolveLocalState, {
+  immediate: true,
+});
+</script>

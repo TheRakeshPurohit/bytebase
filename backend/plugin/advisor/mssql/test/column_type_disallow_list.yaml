@@ -1,0 +1,17 @@
+- statement: |-
+    CREATE TABLE t (
+      name TEXT,
+      age INT,
+      payload JSON
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 411
+      title: column.type-disallow-list
+      content: Column type JSON is disallowed
+      detail: ""
+      startposition:
+        line: 4
+        column: 0
+      endposition: null

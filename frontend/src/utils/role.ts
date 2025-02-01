@@ -1,68 +1,63 @@
-import { Store } from "vuex";
-import { ProjectRoleType, RoleType } from "../types";
+import { t } from "@/plugins/i18n";
+import { useRoleStore } from "@/store";
+import { PresetRoleType } from "@/types";
 
-let store: Store<any>;
+export const extractRoleResourceName = (resourceId: string): string => {
+  const pattern = /(?:^|\/)roles\/([^/]+)(?:$|\/)/;
+  const matches = resourceId.match(pattern);
+  return matches?.[1] ?? "";
+};
 
-export function registerStoreWithRoleUtil(theStore: Store<any>) {
-  store = theStore;
-}
-
-// Returns true if admin feature is NOT supported or the principal is OWNER
-export function isOwner(role: RoleType): boolean {
-  return (
-    !store.getters["subscription/feature"]("bb.feature.rbac") || role == "OWNER"
-  );
-}
-
-// Returns true if admin feature is NOT supported or the principal is DBA
-export function isDBA(role: RoleType): boolean {
-  return (
-    !store.getters["subscription/feature"]("bb.feature.rbac") || role == "DBA"
-  );
-}
-
-export function isDBAOrOwner(role: RoleType): boolean {
-  return isDBA(role) || isOwner(role);
-}
-
-// Returns true if admin feature is NOT supported or the principal is DEVELOPER
-export function isDeveloper(role: RoleType): boolean {
-  return (
-    !store.getters["subscription/feature"]("bb.feature.rbac") ||
-    role == "DEVELOPER"
-  );
-}
-
-export function roleName(role: RoleType): string {
+export const displayRoleTitle = (role: string): string => {
   switch (role) {
-    case "OWNER":
-      return "Owner";
-    case "DBA":
-      return "DBA";
-    case "DEVELOPER":
-      return "Developer";
+    case PresetRoleType.WORKSPACE_ADMIN:
+      return t("role.workspace-admin.self");
+    case PresetRoleType.WORKSPACE_DBA:
+      return t("role.workspace-dba.self");
+    case PresetRoleType.WORKSPACE_MEMBER:
+      return t("role.workspace-member.self");
+    case PresetRoleType.PROJECT_OWNER:
+      return t("role.project-owner.self");
+    case PresetRoleType.PROJECT_DEVELOPER:
+      return t("role.project-developer.self");
+    case PresetRoleType.PROJECT_RELEASER:
+      return t("role.project-releaser.self");
+    case PresetRoleType.SQL_EDITOR_USER:
+      return t("role.sql-editor-user.self");
+    case PresetRoleType.PROJECT_EXPORTER:
+      return t("role.project-exporter.self");
+    case PresetRoleType.PROJECT_VIEWER:
+      return t("role.project-viewer.self");
   }
-}
+  // Use role.title if possible
+  const item = useRoleStore().roleList.find((r) => r.name === role);
+  // Fallback to extracted resource name otherwise
+  return item?.title || extractRoleResourceName(role);
+};
 
-// Project Role
-export function isProjectOwner(role: ProjectRoleType): boolean {
-  return (
-    !store.getters["subscription/feature"]("bb.feature.rbac") || role == "OWNER"
-  );
-}
-
-export function isProjectDeveloper(role: ProjectRoleType): boolean {
-  return (
-    !store.getters["subscription/feature"]("bb.feature.rbac") ||
-    role == "DEVELOPER"
-  );
-}
-
-export function projectRoleName(role: ProjectRoleType): string {
+export const displayRoleDescription = (role: string): string => {
   switch (role) {
-    case "OWNER":
-      return "Owner";
-    case "DEVELOPER":
-      return "Developer";
+    case PresetRoleType.WORKSPACE_ADMIN:
+      return t("role.workspace-admin.description");
+    case PresetRoleType.WORKSPACE_DBA:
+      return t("role.workspace-dba.description");
+    case PresetRoleType.WORKSPACE_MEMBER:
+      return t("role.workspace-member.description");
+    case PresetRoleType.PROJECT_OWNER:
+      return t("role.project-owner.description");
+    case PresetRoleType.PROJECT_DEVELOPER:
+      return t("role.project-developer.description");
+    case PresetRoleType.PROJECT_RELEASER:
+      return t("role.project-releaser.description");
+    case PresetRoleType.SQL_EDITOR_USER:
+      return t("role.sql-editor-user.description");
+    case PresetRoleType.PROJECT_EXPORTER:
+      return t("role.project-exporter.description");
+    case PresetRoleType.PROJECT_VIEWER:
+      return t("role.project-viewer.description");
   }
-}
+  // Use role.description if possible
+  const item = useRoleStore().roleList.find((r) => r.name === role);
+  // Fallback to extracted resource name otherwise
+  return item?.description || extractRoleResourceName(role);
+};

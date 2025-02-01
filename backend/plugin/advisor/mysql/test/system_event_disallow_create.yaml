@@ -1,0 +1,30 @@
+- statement: CREATE TABLE t(a int);
+  changeType: 0
+- statement: |-
+    CREATE EVENT daily_backup
+    ON SCHEDULE
+      EVERY 1 DAY
+    STARTS CURRENT_TIMESTAMP
+    DO
+      INSERT INTO backup_table (backup_date, data)
+      SELECT NOW(), data
+      FROM main_table;
+  changeType: 0
+  want:
+    - status: 2
+      code: 1501
+      title: system.event.disallow-create
+      content: |-
+        Event is forbidden, but "CREATE EVENT daily_backup
+        ON SCHEDULE
+          EVERY 1 DAY
+        STARTS CURRENT_TIMESTAMP
+        DO
+          INSERT INTO backup_table (backup_date, data)
+          SELECT NOW(), data
+          FROM main_table;" creates
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

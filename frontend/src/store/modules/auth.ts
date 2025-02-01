@@ -1,165 +1,195 @@
+import { useLocalStorage } from "@vueuse/core";
 import axios from "axios";
-import isEqual from "lodash-es/isEqual";
+import { defineStore } from "pinia";
+import { computed, ref } from "vue";
+import { authServiceClient } from "@/grpcweb";
+import { router } from "@/router";
 import {
-  Principal,
-  AuthState,
-  LoginInfo,
-  SignupInfo,
-  ActivateInfo,
-  ResourceObject,
-  unknown,
-  PrincipalId,
-  AuthProvider,
-} from "../../types";
-import { getIntCookie } from "../../utils";
+  AUTH_SIGNIN_MODULE,
+  AUTH_PASSWORD_RESET_MODULE,
+  AUTH_MFA_MODULE,
+} from "@/router/auth";
+import { SQL_EDITOR_HOME_MODULE } from "@/router/sqlEditor";
+import { useAppFeature, useUserStore, useSettingV1Store } from "@/store";
+import { unknownUser } from "@/types";
+import type { LoginRequest, User } from "@/types/proto/v1/auth_service";
+import { LoginResponse } from "@/types/proto/v1/auth_service";
+import { UserType } from "@/types/proto/v1/auth_service";
+import { DatabaseChangeMode } from "@/types/proto/v1/setting_service";
+import { getIntCookie } from "@/utils";
 
-function convert(user: ResourceObject, rootGetters: any): Principal {
-  return rootGetters["principal/principalById"](user.id);
-}
+export const useAuthStore = defineStore("auth_v1", () => {
+  const userStore = useUserStore();
+  const currentUserId = ref<number | undefined>();
+  const showLoginModal = ref<boolean>(false);
 
-function convertAuthProvider(authProvider: ResourceObject) {
-  return { ...authProvider.attributes };
-}
+  const currentUser = computed(() => {
+    if (currentUserId.value) {
+      return userStore.getUserById(`${currentUserId.value}`) ?? unknownUser();
+    }
+    return unknownUser();
+  });
 
-const state: () => AuthState = () => ({
-  authProviderList: [],
-  currentUser: unknown("PRINCIPAL") as Principal,
+  const isLoggedIn = () => {
+    return getUserIdFromCookie() != undefined;
+  };
+
+  const getUserIdFromCookie = () => {
+    return getIntCookie("user");
+  };
+
+  const requireResetPassword = computed(() => {
+    if (!currentUserId.value) {
+      return false;
+    }
+    return useLocalStorage<boolean>(
+      `${currentUserId.value}.require_reset_password`,
+      false
+    ).value;
+  });
+
+  const setRequireResetPassword = (requireResetPassword: boolean) => {
+    if (currentUserId.value) {
+      const needResetPasswordCache = useLocalStorage<boolean>(
+        `${currentUserId.value}.require_reset_password`,
+        false
+      );
+      needResetPasswordCache.value = requireResetPassword;
+    }
+  };
+
+  const getRedirectQuery = () => {
+    const query = new URLSearchParams(window.location.search);
+    return query.get("redirect");
+  };
+
+  const login = async (
+    request: Partial<LoginRequest>,
+    redirect: string = ""
+  ) => {
+    const { data } = await axios.post<LoginResponse>("/v1/auth/login", request);
+
+    const redirectUrl = redirect || getRedirectQuery();
+    if (data.mfaTempToken) {
+      return router.push({
+        name: AUTH_MFA_MODULE,
+        query: {
+          mfaTempToken: data.mfaTempToken,
+          redirect: redirectUrl,
+        },
+      });
+    }
+
+    await restoreUser();
+    setRequireResetPassword(data.requireResetPassword);
+
+    await useSettingV1Store().getOrFetchSettingByName(
+      "bb.workspace.profile",
+      /* silent */ true
+    );
+
+    if (!showLoginModal.value) {
+      let nextPage = redirectUrl || "/";
+      const mode = useAppFeature("bb.feature.database-change-mode");
+
+      if (mode.value === DatabaseChangeMode.EDITOR) {
+        const route = router.resolve({
+          name: SQL_EDITOR_HOME_MODULE,
+        });
+        nextPage = route.fullPath;
+      }
+
+      if (data.requireResetPassword) {
+        return router.push({
+          name: AUTH_PASSWORD_RESET_MODULE,
+          query: {
+            redirect: nextPage,
+          },
+        });
+      }
+
+      return router.replace(nextPage);
+    }
+    showLoginModal.value = false;
+  };
+
+  const signup = async (request: Partial<User>) => {
+    await authServiceClient.createUser({
+      user: {
+        email: request.email,
+        title: request.name,
+        password: request.password,
+        userType: UserType.USER,
+      },
+    });
+    await login({
+      email: request.email,
+      password: request.password,
+      web: true,
+    });
+  };
+
+  const logout = async () => {
+    try {
+      await axios.post("/v1/auth/logout");
+      showLoginModal.value = false;
+    } catch {
+      // nothing
+    } finally {
+      const pathname = location.pathname;
+      // Replace and reload the page to clear frontend state directly.
+      window.location.href = router.resolve({
+        name: AUTH_SIGNIN_MODULE,
+        query: {
+          redirect:
+            getRedirectQuery() ||
+            (pathname.startsWith("/auth") ? undefined : pathname),
+        },
+      }).fullPath;
+    }
+  };
+
+  const restoreUser = async () => {
+    currentUserId.value = getUserIdFromCookie();
+    if (currentUserId.value) {
+      await useUserStore().getOrFetchUserById(
+        String(currentUserId.value),
+        true // silent
+      );
+    }
+  };
+
+  const refreshUserIfNeeded = async (name: string) => {
+    if (name === currentUser.value.name) {
+      await useUserStore().fetchUser(
+        name,
+        true // silent
+      );
+    }
+  };
+
+  return {
+    currentUser,
+    currentUserId,
+    isLoggedIn,
+    getUserIdFromCookie,
+    login,
+    signup,
+    logout,
+    restoreUser,
+    refreshUserIfNeeded,
+    requireResetPassword,
+    setRequireResetPassword,
+    showLoginModal,
+  };
 });
 
-const getters = {
-  authProviderList: (state: AuthState) => (): AuthProvider[] => {
-    return state.authProviderList;
-  },
-
-  isLoggedIn: (state: AuthState) => (): boolean => {
-    return getIntCookie("user") != undefined;
-  },
-
-  currentUser: (state: AuthState) => (): Principal => {
-    return state.currentUser;
-  },
+export const useCurrentUserV1 = () => {
+  const authStore = useAuthStore();
+  return computed(() => authStore.currentUser);
 };
 
-const actions = {
-  async fetchProviderList({ commit }: any) {
-    const providerList = (await axios.get("/api/auth/provider")).data.data;
-    const convertedProviderList = providerList.map(
-      (provider: ResourceObject) => {
-        return convertAuthProvider(provider);
-      }
-    );
-    commit("setAuthProviderList", convertedProviderList);
-    return convertedProviderList;
-  },
-
-  async login({ commit, dispatch, rootGetters }: any, loginInfo: LoginInfo) {
-    const loggedInUser = (
-      await axios.post(`/api/auth/login/${loginInfo.authProvider}`, {
-        data: { type: "loginInfo", attributes: loginInfo.payload },
-      })
-    ).data.data;
-
-    // Refresh the corresponding principal
-    await dispatch("principal/fetchPrincipalById", loggedInUser.id, {
-      root: true,
-    });
-
-    // The conversion relies on the above refresh.
-    const convertedUser = convert(loggedInUser, rootGetters);
-    commit("setCurrentUser", convertedUser);
-    return convertedUser;
-  },
-
-  async logout({ commit }: any) {
-    try {
-      await axios.post("/api/auth/logout");
-    } finally {
-      commit("setCurrentUser", unknown("PRINCIPAL") as Principal);
-    }
-    return unknown("PRINCIPAL") as Principal;
-  },
-
-  async signup({ commit, dispatch, rootGetters }: any, signupInfo: SignupInfo) {
-    const newUser = (
-      await axios.post("/api/auth/signup", {
-        data: { type: "signupInfo", attributes: signupInfo },
-      })
-    ).data.data;
-
-    // Refresh the corresponding principal
-    await dispatch("principal/fetchPrincipalById", newUser.id, { root: true });
-
-    // The conversion relies on the above refresh.
-    const convertedUser = convert(newUser, rootGetters);
-    commit("setCurrentUser", convertedUser);
-    return convertedUser;
-  },
-
-  async activate(
-    { commit, dispatch, rootGetters }: any,
-    activateInfo: ActivateInfo
-  ) {
-    const activatedUser = (
-      await axios.post("/api/auth/activate", {
-        data: { type: "activateInfo", attributes: activateInfo },
-      })
-    ).data.data;
-
-    // Refresh the corresponding principal
-    dispatch("principal/fetchPrincipalById", activatedUser.id, { root: true });
-
-    // The conversion relies on the above task to get the lastest data
-    const convertedUser = convert(activatedUser, rootGetters);
-    commit("setCurrentUser", convertedUser);
-    return convertedUser;
-  },
-
-  async restoreUser({ commit, dispatch }: any) {
-    const userId = getIntCookie("user");
-    if (userId) {
-      const loggedInUser = await dispatch(
-        "principal/fetchPrincipalById",
-        userId,
-        {
-          root: true,
-        }
-      );
-
-      commit("setCurrentUser", loggedInUser);
-      return loggedInUser;
-    }
-    return unknown("PRINCIPAL") as Principal;
-  },
-
-  async refreshUserIfNeeded(
-    { commit, state, rootGetters }: any,
-    principalId: PrincipalId
-  ) {
-    if (principalId == state.currentUser.id) {
-      const refreshedUser = rootGetters["principal/principalById"](
-        state.currentUser.id
-      );
-      if (!isEqual(refreshedUser, state.currentUser)) {
-        commit("setCurrentUser", refreshedUser);
-      }
-    }
-  },
-};
-
-const mutations = {
-  setAuthProviderList(state: AuthState, authProviderList: AuthProvider[]) {
-    state.authProviderList = authProviderList;
-  },
-
-  setCurrentUser(state: AuthState, user: Principal) {
-    state.currentUser = user;
-  },
-};
-
-export default {
-  namespaced: true,
-  state,
-  getters,
-  actions,
-  mutations,
+export const useIsLoggedIn = () => {
+  const store = useAuthStore();
+  return computed(() => store.isLoggedIn() && store.currentUser.name !== "");
 };

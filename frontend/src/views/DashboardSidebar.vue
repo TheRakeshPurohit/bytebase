@@ -1,63 +1,69 @@
 <template>
   <!-- Navigation -->
-  <nav class="px-2">
-    <button
-      class="mb-2 w-full flex items-center justify-between rounded-md border border-control-border bg-white hover:bg-control-bg-hover pl-2 pr-1 py-0.5 outline-none"
-      @click="onClickSearchButton"
-    >
-      <span class="text-control-placeholder">{{ $t("common.search") }}</span>
-      <span class="flex items-center space-x-1">
-        <kbd
-          class="h-5 flex items-center justify-center bg-black bg-opacity-10 rounded text-sm px-1 text-control overflow-y-hidden"
-        >
-          <span v-if="isMac" class="text-xl px-0.5">⌘</span>
-          <span v-else class="tracking-tighter transform scale-x-90">Ctrl</span>
-          <span class="ml-1 mr-0.5">K</span>
-        </kbd>
-      </span>
-    </button>
-
-    <router-link to="/" class="outline-item group flex items-center px-2 py-2">
-      <heroicons-outline:home class="w-5 h-5 mr-2" />
-      {{ $t("common.home") }}
-    </router-link>
-    <router-link
-      to="/sql-editor"
-      class="outline-item group flex items-center px-2 py-2"
-    >
-      <heroicons-outline:terminal class="w-5 h-5 mr-2" />
-      {{ $t("sql-editor.self") }}
-    </router-link>
-    <router-link
-      to="/anomaly-center"
-      class="outline-item group flex items-center px-2 py-2"
-    >
-      <heroicons-outline:shield-exclamation class="w-5 h-5 mr-2" />
-      {{ $t("anomaly-center") }}
-    </router-link>
-    <div>
-      <BookmarkListSidePanel />
-    </div>
-    <div class="mt-1">
-      <ProjectListSidePanel />
-    </div>
-    <div class="mt-1">
-      <DatabaseListSidePanel />
-    </div>
-  </nav>
+  <CommonSidebar
+    :key="'dashboard'"
+    :item-list="dashboardSidebarItemList"
+    :get-item-class="getItemClass"
+    :logo-redirect="logoRedirect"
+  />
 </template>
 
 <script lang="ts" setup>
-import BookmarkListSidePanel from "../components/BookmarkListSidePanel.vue";
-import ProjectListSidePanel from "../components/ProjectListSidePanel.vue";
-import DatabaseListSidePanel from "../components/DatabaseListSidePanel.vue";
-import { useKBarHandler } from "@bytebase/vue-kbar";
+import type { Action } from "@bytebase/vue-kbar";
+import { defineAction, useRegisterActions } from "@bytebase/vue-kbar";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
+import CommonSidebar from "@/components/CommonSidebar.vue";
+import { useGlobalDatabaseActions } from "@/components/KBar/useDatabaseActions";
+import { useProjectActions } from "@/components/KBar/useProjectActions";
+import { WORKSPACE_ROUTE_LANDING } from "@/router/dashboard/workspaceRoutes";
+import { SQL_EDITOR_HOME_MODULE } from "@/router/sqlEditor";
+import { useAppFeature } from "@/store";
+import { DatabaseChangeMode } from "@/types/proto/v1/setting_service";
+import { useDashboardSidebar, type DashboardSidebarItem } from "@/utils";
 
-const isMac = navigator.platform.match(/mac/i);
+const { t } = useI18n();
+const router = useRouter();
+const databaseChangeMode = useAppFeature("bb.feature.database-change-mode");
+const { getItemClass, dashboardSidebarItemList } = useDashboardSidebar();
 
-const handler = useKBarHandler();
+const logoRedirect = computed(() => {
+  if (databaseChangeMode.value === DatabaseChangeMode.EDITOR) {
+    return SQL_EDITOR_HOME_MODULE;
+  }
+  return WORKSPACE_ROUTE_LANDING;
+});
 
-const onClickSearchButton = () => {
-  handler.value.show();
-};
+const navigationKbarActions = computed((): Action[] => {
+  return dashboardSidebarItemList.value
+    .reduce((list, item) => {
+      if (!item.children || item.children.length === 0) {
+        if (item.navigationId && item.name && !item.hide) {
+          list.push(item);
+        }
+      } else {
+        for (const child of item.children) {
+          if (child.navigationId && child.name && !child.hide) {
+            list.push(child);
+          }
+        }
+      }
+      return list;
+    }, [] as DashboardSidebarItem[])
+    .map((item) => {
+      return defineAction({
+        id: item.navigationId,
+        name: item.title,
+        section: t("kbar.navigation"),
+        shortcut: item.shortcuts,
+        keywords: item.title?.toLocaleLowerCase(),
+        perform: () => router.push({ name: item.name }),
+      });
+    });
+});
+useRegisterActions(navigationKbarActions);
+
+useProjectActions(10);
+useGlobalDatabaseActions(10);
 </script>

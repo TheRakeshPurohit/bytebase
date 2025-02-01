@@ -1,3 +1,5 @@
-import SelectDatabaseLabel from "./SelectDatabaseLabel.vue";
+import TransferDatabaseForm from "./TransferDatabaseForm.vue";
 
-export { SelectDatabaseLabel };
+export * from "./utils";
+
+export { TransferDatabaseForm };

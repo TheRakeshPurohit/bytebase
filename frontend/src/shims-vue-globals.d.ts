@@ -1,37 +1,21 @@
-import type {
-  databaseSlug,
-  dataSourceSlug,
-  environmentName,
-  environmentSlug,
-  humanizeTs,
-  instanceName,
-  instanceSlug,
-  projectName,
-  projectSlug,
-  sizeToFit,
-  urlfy,
-} from "./utils";
 import type dayjs from "dayjs";
-import type { isEmpty } from "lodash-es";
+import type { Composer } from "vue-i18n";
+import type { humanizeTs, humanizeDurationV1, humanizeDate } from "./utils";
 
-declare module "@vue/runtime-core" {
+export {};
+
+declare module "vue" {
   export interface ComponentCustomProperties {
     window: Window & typeof globalThis;
     console: Console;
     dayjs: typeof dayjs;
     humanizeTs: typeof humanizeTs;
+    humanizeDurationV1: typeof humanizeDurationV1;
+    humanizeDate: typeof humanizeDate;
     isDev: boolean;
     isRelease: boolean;
-    sizeToFit: typeof sizeToFit;
-    urlfy: typeof urlfy;
-    isEmpty: typeof isEmpty;
-    environmentName: typeof environmentName;
-    environmentSlug: typeof environmentSlug;
-    projectName: typeof projectName;
-    projectSlug: typeof projectSlug;
-    instanceName: typeof instanceName;
-    instanceSlug: typeof instanceSlug;
-    databaseSlug: typeof databaseSlug;
-    dataSourceSlug: typeof dataSourceSlug;
+    $t: Composer["t"];
+    $te: Composer["te"];
+    $tm: Composer["tm"];
   }
 }

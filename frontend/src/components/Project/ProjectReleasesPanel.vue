@@ -1,0 +1,70 @@
+<template>
+  <div class="w-full flex flex-col gap-y-4">
+    <NAlert type="info">
+      <span>{{ $t("release.usage-description") }}</span>
+      <LearnMoreLink
+        url="https://www.bytebase.com/docs/vcs-integration/custom/release/?source=console"
+        class="ml-1"
+      />
+    </NAlert>
+    <!-- Only show create button in dev mode -->
+    <div v-if="isDev" class="w-full flex flex-row justify-end items-center">
+      <router-link :to="`/${project.name}/releases/new`">
+        <NButton type="primary">
+          <template #icon>
+            <PlusIcon />
+          </template>
+          {{ $t("release.create") }}
+        </NButton>
+      </router-link>
+    </div>
+    <PagedTable
+      :key="project.name"
+      :session-key="`project-${project.name}-releases`"
+      :page-size="50"
+      :fetch-list="fetchReleaseList"
+    >
+      <template #table="{ list, loading }">
+        <ReleaseDataTable
+          :bordered="true"
+          :loading="loading"
+          :release-list="list"
+        />
+      </template>
+    </PagedTable>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import { PlusIcon } from "lucide-vue-next";
+import { NAlert, NButton } from "naive-ui";
+import PagedTable from "@/components/v2/Model/PagedTable.vue";
+import { useReleaseStore } from "@/store";
+import type { ComposedProject } from "@/types";
+import ReleaseDataTable from "../Release/ReleaseDataTable.vue";
+import LearnMoreLink from "@/components/LearnMoreLink.vue";
+
+const props = defineProps<{
+  project: ComposedProject;
+}>();
+
+const releaseStore = useReleaseStore();
+
+const fetchReleaseList = async ({
+  pageToken,
+  pageSize,
+}: {
+  pageToken: string;
+  pageSize: number;
+}) => {
+  const { nextPageToken, releases } = await releaseStore.fetchReleasesByProject(
+    props.project.name,
+    { pageSize, pageToken },
+    false
+  );
+  return {
+    nextPageToken,
+    list: releases,
+  };
+};
+</script>

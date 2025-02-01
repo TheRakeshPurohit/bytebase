@@ -1,19 +1,20 @@
-import { SettingId } from "./id";
-import { Principal } from "./principal";
+export type SettingName =
+  | "bb.branding.logo"
+  | "bb.workspace.id"
+  | "bb.app.im"
+  | "bb.workspace.watermark"
+  | "bb.workspace.profile"
+  | "bb.workspace.approval"
+  | "bb.workspace.approval.external"
+  | "bb.plugin.openai.key"
+  | "bb.plugin.openai.endpoint"
+  | "bb.plugin.openai.model"
+  | "bb.enterprise.trial"
+  | "bb.workspace.schema-template"
+  | "bb.workspace.data-classification"
+  | "bb.workspace.semantic-types"
+  | "bb.workspace.maximum-sql-result-size"
+  | "bb.workspace.scim"
+  | "bb.workspace.password-restriction";
 
-export type SettingName = string;
-
-export type Setting = {
-  id: SettingId;
-
-  // Standard fields
-  creator: Principal;
-  createdTs: number;
-  updater: Principal;
-  updatedTs: number;
-
-  // Domain specific fields
-  name: SettingName;
-  value: string;
-  description: string;
-};
+export const defaultTokenDurationInHours = 7 * 24;

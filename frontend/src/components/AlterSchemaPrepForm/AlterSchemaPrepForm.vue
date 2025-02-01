@@ -1,367 +1,385 @@
 <template>
-  <div class="mx-4 space-y-4 max-w-min overflow-x-hidden">
-    <VCSTipsInfo :project="state.project" />
+  <DrawerContent class="max-w-[100vw]">
+    <template #header>
+      <div class="flex flex-col gap-y-1">
+        <span>
+          {{
+            isEditSchema
+              ? $t("database.edit-schema")
+              : $t("database.change-data")
+          }}
+        </span>
+      </div>
+    </template>
 
-    <div class="overflow-x-auto">
-      <div class="mx-1" :class="wrapperClass">
-        <template v-if="projectId">
-          <template v-if="isTenantProject">
-            <!-- tenant mode project -->
-            <ProjectTenantView
-              :state="state"
-              :database-list="databaseList"
-              :environment-list="environmentList"
-              :project="state.project"
-              @dismiss="cancel"
+    <div
+      class="space-y-4 h-full w-[calc(100vw-8rem)] lg:w-[60rem] max-w-[calc(100vw-8rem)] overflow-x-auto"
+    >
+      <div v-if="ready">
+        <div class="space-y-3">
+          <div class="w-full flex items-center space-x-2">
+            <AdvancedSearch
+              v-model:params="state.params"
+              :autofocus="false"
+              :placeholder="$t('database.filter-database')"
+              :scope-options="scopeOptions"
             />
-          </template>
-          <template v-else>
-            <!-- standard mode project, single/multiple databases ui -->
-            <ProjectStandardView
-              :state="state"
-              :project="state.project"
-              :database-list="databaseList"
-              :environment-list="environmentList"
-              @select-database="selectDatabase"
+            <DatabaseLabelFilter
+              v-model:selected="state.selectedLabels"
+              :database-list="rawDatabaseList"
+              :placement="'left-start'"
             />
-          </template>
-        </template>
-        <template v-else>
-          <NTabs v-model:value="state.tab" type="line">
-            <NTabPane :tab="$t('project.mode.standard')" name="standard">
-              <!-- a simple table -->
-              <DatabaseTable
-                mode="ALL_SHORT"
-                :bordered="true"
-                :custom-click="true"
-                :database-list="standardProjectDatabaseList"
-                @select-database="selectDatabase"
-              />
-            </NTabPane>
-            <NTabPane :tab="$t('project.mode.tenant')" name="tenant">
-              <CommonTenantView
-                :state="state"
-                :database-list="databaseList"
-                :environment-list="environmentList"
-                @dismiss="cancel"
-              />
-            </NTabPane>
-          </NTabs>
-        </template>
+          </div>
+          <DatabaseV1Table
+            mode="ALL_SHORT"
+            :show-sql-editor-button="false"
+            :database-list="selectableDatabaseList"
+            :keyword="state.params.query.trim().toLowerCase()"
+            @update:selected-databases="handleDatabasesSelectionChanged"
+          />
+          <SchemalessDatabaseTable
+            v-if="isEditSchema"
+            mode="ALL"
+            :database-list="schemalessDatabaseList"
+          />
+        </div>
+      </div>
+      <div
+        v-if="!ready"
+        class="w-full h-[20rem] flex items-center justify-center"
+      >
+        <BBSpin />
       </div>
     </div>
 
-    <!-- Create button group -->
-    <div class="pt-4 border-t border-block-border flex justify-end">
-      <button
-        type="button"
-        class="btn-normal py-2 px-4"
-        @click.prevent="cancel"
-      >
-        {{ $t("common.cancel") }}
-      </button>
-      <button
-        v-if="state.alterType == 'MULTI_DB'"
-        class="btn-primary ml-3 inline-flex justify-center py-2 px-4"
-        :disabled="!allowGenerateMultiDb"
-        @click.prevent="generateMultDb"
-      >
-        {{ $t("common.next") }}
-      </button>
+    <template #footer>
+      <div class="flex-1 flex items-center justify-between">
+        <div>
+          <NTooltip v-if="flattenSelectedDatabaseNameList.length > 0">
+            <template #trigger>
+              <div class="textinfolabel">
+                {{
+                  $t("database.selected-n-databases", {
+                    n: flattenSelectedDatabaseNameList.length,
+                  })
+                }}
+              </div>
+            </template>
+            <div class="mx-2">
+              <ul class="list-disc">
+                <li v-for="db in flattenSelectedDatabaseList" :key="db.name">
+                  {{ db.databaseName }}
+                </li>
+              </ul>
+            </div>
+          </NTooltip>
+        </div>
 
-      <button
-        v-if="isTenantProject || (!projectId && state.tab === 'tenant')"
-        class="btn-primary ml-3 inline-flex justify-center py-2 px-4"
-        :disabled="!allowGenerateTenant"
-        @click.prevent="generateTenant"
-      >
-        {{ $t("common.next") }}
-      </button>
-    </div>
-  </div>
+        <div class="flex items-center justify-end gap-x-3">
+          <NCheckbox v-if="!props.planOnly" v-model:checked="state.planOnly">
+            {{ $t("issue.sql-review-only") }}
+          </NCheckbox>
+          <NButton @click.prevent="cancel">
+            {{ $t("common.cancel") }}
+          </NButton>
+          <NTooltip :disabled="flattenSelectedProjectList.length <= 1">
+            <template #trigger>
+              <NButton
+                type="primary"
+                :disabled="!allowGenerateMultiDb"
+                @click.prevent="generateMultiDb"
+              >
+                {{ $t("common.next") }}
+              </NButton>
+            </template>
+            <span class="w-56 text-sm">
+              {{ $t("database.select-databases-from-same-project") }}
+            </span>
+          </NTooltip>
+        </div>
+      </div>
+    </template>
+  </DrawerContent>
 
   <FeatureModal
-    v-if="state.showFeatureModal"
-    feature="bb.feature.multi-tenancy"
-    @cancel="state.showFeatureModal = false"
+    :open="!!featureModalContext.feature"
+    :feature="featureModalContext.feature"
+    @cancel="featureModalContext.feature = undefined"
+  />
+
+  <SchemaEditorModal
+    v-if="state.showSchemaEditorModal"
+    :database-names="schemaEditorContext.databaseNameList"
+    :alter-type="'MULTI_DB'"
+    :plan-only="state.planOnly"
+    @close="state.showSchemaEditorModal = false"
   />
 </template>
 
-<script lang="ts">
-import { computed, reactive, PropType, defineComponent } from "vue";
-import { useStore } from "vuex";
+<script lang="ts" setup>
+import { uniqBy } from "lodash-es";
+import { NButton, NCheckbox, NTooltip } from "naive-ui";
+import type { PropType } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import DatabaseTable from "../DatabaseTable.vue";
+import { BBSpin } from "@/bbkit";
+import { FeatureModal } from "@/components/FeatureGuard";
+import DatabaseV1Table from "@/components/v2/Model/DatabaseV1Table";
 import {
-  baseDirectoryWebUrl,
-  Database,
-  DatabaseId,
-  Principal,
-  Project,
-  ProjectId,
-  Repository,
-  UNKNOWN_ID,
-} from "../../types";
-import { sortDatabaseList } from "../../utils";
-import { cloneDeep } from "lodash-es";
-import VCSTipsInfo from "./VCSTipsInfo.vue";
-import ProjectStandardView, {
-  State as ProjectStandardState,
-} from "./ProjectStandardView.vue";
-import ProjectTenantView, {
-  State as ProjectTenantState,
-} from "./ProjectTenantView.vue";
-import CommonTenantView, {
-  State as CommonTenantState,
-} from "./CommonTenantView.vue";
-import { NTabs, NTabPane } from "naive-ui";
-import { useEventListener } from "@vueuse/core";
+  PROJECT_V1_ROUTE_ISSUE_DETAIL,
+  PROJECT_V1_ROUTE_PLAN_DETAIL,
+} from "@/router/dashboard/projectV1";
+import { useDatabaseV1Store, useProjectV1Store, useAppFeature } from "@/store";
+import { useDatabaseV1List } from "@/store/modules/v1/databaseList";
+import type { ComposedDatabase, FeatureType } from "@/types";
+import { UNKNOWN_ID, DEFAULT_PROJECT_NAME } from "@/types";
+import { State } from "@/types/proto/v1/common";
+import type { SearchParams } from "@/utils";
+import {
+  allowUsingSchemaEditor,
+  instanceV1HasAlterSchema,
+  filterDatabaseV1ByKeyword,
+  sortDatabaseV1List,
+  generateIssueTitle,
+  extractEnvironmentResourceName,
+  extractInstanceResourceName,
+  extractProjectResourceName,
+} from "@/utils";
+import AdvancedSearch from "../AdvancedSearch";
+import { useCommonSearchScopeOptions } from "../AdvancedSearch/useCommonSearchScopeOptions";
+import { DatabaseLabelFilter, DrawerContent } from "../v2";
+import SchemaEditorModal from "./SchemaEditorModal.vue";
+import SchemalessDatabaseTable from "./SchemalessDatabaseTable.vue";
 
-type LocalState = ProjectStandardState &
-  ProjectTenantState &
-  CommonTenantState & {
-    project?: Project;
-    tab: "standard" | "tenant";
-    showFeatureModal: boolean;
-  };
+type LocalState = {
+  label: string;
+  showSchemaLessDatabaseList: boolean;
+  selectedLabels: { key: string; value: string }[];
+  selectedDatabaseNames: Set<string>;
+  showSchemaEditorModal: boolean;
+  params: SearchParams;
+  // planOnly is used to indicate whether only to create plan.
+  planOnly: boolean;
+};
 
-export default defineComponent({
-  name: "AlterSchemaPrepForm",
-  components: {
-    VCSTipsInfo,
-    DatabaseTable,
-    ProjectStandardView,
-    ProjectTenantView,
-    CommonTenantView,
-    NTabs,
-    NTabPane,
+const props = defineProps({
+  projectName: {
+    type: String,
+    required: true,
   },
-  props: {
-    projectId: {
-      type: Number as PropType<ProjectId>,
-      default: undefined,
-    },
-    type: {
-      type: String as PropType<
-        "bb.issue.database.schema.update" | "bb.issue.database.data.update"
-      >,
-      required: true,
-    },
+  type: {
+    type: String as PropType<
+      "bb.issue.database.schema.update" | "bb.issue.database.data.update"
+    >,
+    required: true,
   },
-  emits: ["dismiss"],
-  setup(props, { emit }) {
-    const store = useStore();
-    const router = useRouter();
-
-    const currentUser = computed(
-      () => store.getters["auth/currentUser"]() as Principal
-    );
-
-    useEventListener(window, "keydown", (e) => {
-      if (e.code === "Escape") {
-        cancel();
-      }
-    });
-
-    const state = reactive<LocalState>({
-      project: props.projectId
-        ? store.getters["project/projectById"](props.projectId)
-        : undefined,
-      tab: "standard",
-      alterType: "SINGLE_DB",
-      selectedDatabaseIdForEnvironment: new Map(),
-      tenantProjectId: undefined,
-      selectedDatabaseName: undefined,
-      deployingTenantDatabaseList: [],
-      showFeatureModal: false,
-    });
-
-    // Returns true if alter schema, false if change data.
-    const isAlterSchema = computed((): boolean => {
-      return props.type === "bb.issue.database.schema.update";
-    });
-
-    const isTenantProject = computed((): boolean => {
-      return state.project?.tenantMode === "TENANT";
-    });
-
-    const environmentList = computed(() => {
-      return store.getters["environment/environmentList"](["NORMAL"]);
-    });
-
-    const databaseList = computed(() => {
-      var list;
-      if (props.projectId) {
-        list = store.getters["database/databaseListByProjectId"](
-          props.projectId
-        );
-      } else {
-        list = store.getters["database/databaseListByPrincipalId"](
-          currentUser.value.id
-        );
-      }
-
-      return sortDatabaseList(cloneDeep(list), environmentList.value);
-    });
-
-    const standardProjectDatabaseList = computed(() => {
-      return databaseList.value.filter(
-        (db) => db.project.tenantMode !== "TENANT"
-      );
-    });
-
-    const tenantProjectDatabaseList = computed(() => {
-      return databaseList.value.filter(
-        (db) => db.project.tenantMode === "TENANT"
-      );
-    });
-
-    const allowGenerateMultiDb = computed(() => {
-      return state.selectedDatabaseIdForEnvironment.size > 0;
-    });
-
-    const generateMultDb = () => {
-      const databaseIdList: DatabaseId[] = [];
-      for (var i = 0; i < environmentList.value.length; i++) {
-        if (
-          state.selectedDatabaseIdForEnvironment.get(
-            environmentList.value[i].id
-          )
-        ) {
-          databaseIdList.push(
-            state.selectedDatabaseIdForEnvironment.get(
-              environmentList.value[i].id
-            )!
-          );
-        }
-      }
-      router.push({
-        name: "workspace.issue.detail",
-        params: {
-          issueSlug: "new",
-        },
-        query: {
-          template: props.type,
-          name: isAlterSchema.value ? `Alter schema` : `Change data`,
-          project: props.projectId,
-          databaseList: databaseIdList.join(","),
-        },
-      });
-    };
-
-    const allowGenerateTenant = computed(() => {
-      if (!state.selectedDatabaseName) return false;
-
-      // not allowed when database list filtered by deployment config is empty
-      // which means no database will be deployed
-      if (state.deployingTenantDatabaseList.length === 0) return false;
-
-      return true;
-    });
-
-    const generateTenant = async () => {
-      if (!store.getters["subscription/feature"]("bb.feature.multi-tenancy")) {
-        state.showFeatureModal = true;
-        return;
-      }
-
-      emit("dismiss");
-
-      const projectId = props.projectId || state.tenantProjectId;
-      if (!projectId) return;
-
-      const project = store.getters["project/projectById"](
-        projectId
-      ) as Project;
-
-      if (project.id === UNKNOWN_ID) return;
-
-      if (project.workflowType === "UI") {
-        router.push({
-          name: "workspace.issue.detail",
-          params: {
-            issueSlug: "new",
-          },
-          query: {
-            template: props.type,
-            name: `[${state.selectedDatabaseName}] ${
-              isAlterSchema.value ? `Alter schema` : `Change data`
-            }`,
-            project: project.id,
-            databaseName: state.selectedDatabaseName,
-            mode: "tenant",
-          },
-        });
-      } else if (project.workflowType === "VCS") {
-        store
-          .dispatch("repository/fetchRepositoryByProjectId", project.id)
-          .then((repository: Repository) => {
-            window.open(baseDirectoryWebUrl(repository), "_blank");
-          });
-      }
-    };
-
-    const selectDatabase = (database: Database) => {
-      emit("dismiss");
-
-      if (database.project.workflowType == "UI") {
-        router.push({
-          name: "workspace.issue.detail",
-          params: {
-            issueSlug: "new",
-          },
-          query: {
-            template: props.type,
-            name: `[${database.name}] ${
-              isAlterSchema.value ? `Alter schema` : `Change data`
-            }`,
-            project: database.project.id,
-            databaseList: database.id,
-          },
-        });
-      } else if (database.project.workflowType == "VCS") {
-        store
-          .dispatch(
-            "repository/fetchRepositoryByProjectId",
-            database.project.id
-          )
-          .then((repository: Repository) => {
-            window.open(baseDirectoryWebUrl(repository), "_blank");
-          });
-      }
-    };
-
-    const cancel = () => {
-      emit("dismiss");
-    };
-
-    const wrapperClass = computed(() => {
-      // provide a wider modal to tenant view
-      if (props.projectId) {
-        if (isTenantProject.value) return "w-192";
-        else return "w-160";
-      } else {
-        if (state.tab === "standard") return "w-160";
-        return "w-192";
-      }
-    });
-
-    return {
-      wrapperClass,
-      state,
-      isAlterSchema,
-      isTenantProject,
-      environmentList,
-      databaseList,
-      standardProjectDatabaseList,
-      tenantProjectDatabaseList,
-      allowGenerateMultiDb,
-      generateMultDb,
-      allowGenerateTenant,
-      generateTenant,
-      selectDatabase,
-      cancel,
-    };
+  planOnly: {
+    type: Boolean,
+    default: false,
   },
 });
+
+const emit = defineEmits(["dismiss"]);
+
+const router = useRouter();
+const projectV1Store = useProjectV1Store();
+const databaseV1Store = useDatabaseV1Store();
+const disableSchemaEditor = useAppFeature(
+  "bb.feature.issue.disable-schema-editor"
+);
+
+const featureModalContext = ref<{
+  feature?: FeatureType;
+}>({});
+
+const schemaEditorContext = ref<{
+  databaseNameList: string[];
+}>({
+  databaseNameList: [],
+});
+
+const state = reactive<LocalState>({
+  selectedDatabaseNames: new Set<string>(),
+  label: "environment",
+  showSchemaLessDatabaseList: false,
+  showSchemaEditorModal: false,
+  selectedLabels: [],
+  params: {
+    query: "",
+    scopes: [],
+  },
+  planOnly: props.planOnly,
+});
+
+const scopeOptions = useCommonSearchScopeOptions(
+  computed(() => state.params),
+  computed(() => ["project", "instance", "environment"])
+);
+
+const selectedProject = computed(() => {
+  return projectV1Store.getProjectByName(props.projectName);
+});
+
+const selectedInstance = computed(() => {
+  return (
+    state.params.scopes.find((scope) => scope.id === "instance")?.value ??
+    `${UNKNOWN_ID}`
+  );
+});
+
+const selectedEnvironment = computed(() => {
+  return (
+    state.params.scopes.find((scope) => scope.id === "environment")?.value ??
+    `${UNKNOWN_ID}`
+  );
+});
+
+// Returns true if alter schema, false if change data.
+const isEditSchema = computed((): boolean => {
+  return props.type === "bb.issue.database.schema.update";
+});
+
+const { ready } = useDatabaseV1List(props.projectName);
+
+const rawDatabaseList = computed(() => {
+  let list: ComposedDatabase[] = [];
+  if (selectedProject.value) {
+    list = databaseV1Store.databaseListByProject(selectedProject.value.name);
+  } else {
+    list = databaseV1Store.databaseListByUser;
+  }
+  list = list.filter(
+    (db) => db.syncState == State.ACTIVE && db.project !== DEFAULT_PROJECT_NAME
+  );
+  return list;
+});
+
+const filteredDatabaseList = computed(() => {
+  const list = rawDatabaseList.value.filter((db) => {
+    if (
+      selectedEnvironment.value !== `${UNKNOWN_ID}` &&
+      extractEnvironmentResourceName(db.effectiveEnvironment) !==
+        selectedEnvironment.value
+    ) {
+      return false;
+    }
+    if (
+      selectedInstance.value !== `${UNKNOWN_ID}` &&
+      extractInstanceResourceName(db.instance) !== selectedInstance.value
+    ) {
+      return false;
+    }
+
+    const filterByKeyword = filterDatabaseV1ByKeyword(
+      db,
+      state.params.query.trim(),
+      ["name", "environment", "instance", "project"]
+    );
+    if (!filterByKeyword) {
+      return false;
+    }
+
+    if (state.selectedLabels.length > 0) {
+      return state.selectedLabels.some((kv) => db.labels[kv.key] === kv.value);
+    }
+
+    return true;
+  });
+
+  return sortDatabaseV1List(list);
+});
+
+const selectableDatabaseList = computed(() => {
+  if (isEditSchema.value) {
+    return filteredDatabaseList.value.filter((db) =>
+      instanceV1HasAlterSchema(db.instanceResource)
+    );
+  }
+
+  return filteredDatabaseList.value;
+});
+
+const schemalessDatabaseList = computed(() => {
+  return filteredDatabaseList.value.filter(
+    (db) => !instanceV1HasAlterSchema(db.instanceResource)
+  );
+});
+
+const flattenSelectedDatabaseNameList = computed(() => {
+  return [...state.selectedDatabaseNames];
+});
+
+const flattenSelectedProjectList = computed(() => {
+  const projects = flattenSelectedDatabaseNameList.value.map((name) => {
+    return databaseV1Store.getDatabaseByName(name).projectEntity;
+  });
+  return uniqBy(projects, (project) => project.name);
+});
+
+const allowGenerateMultiDb = computed(() => {
+  return (
+    flattenSelectedProjectList.value.length === 1 &&
+    flattenSelectedDatabaseNameList.value.length > 0
+  );
+});
+
+const flattenSelectedDatabaseList = computed(() =>
+  flattenSelectedDatabaseNameList.value.map(
+    (name) => selectableDatabaseList.value.find((db) => db.name === name)!
+  )
+);
+
+// Also works when single db selected.
+const generateMultiDb = async () => {
+  if (
+    flattenSelectedDatabaseList.value.length === 1 &&
+    isEditSchema.value &&
+    allowUsingSchemaEditor(flattenSelectedDatabaseList.value) &&
+    !disableSchemaEditor.value
+  ) {
+    schemaEditorContext.value.databaseNameList = [
+      ...flattenSelectedDatabaseNameList.value,
+    ];
+    state.showSchemaEditorModal = true;
+    return;
+  }
+
+  if (flattenSelectedProjectList.value.length !== 1) {
+    return;
+  }
+
+  const project = flattenSelectedProjectList.value[0];
+  const query: Record<string, any> = {
+    template: props.type,
+    name: generateIssueTitle(
+      props.type,
+      flattenSelectedDatabaseList.value.map((db) => db.databaseName)
+    ),
+    databaseList: flattenSelectedDatabaseList.value
+      .map((db) => db.name)
+      .join(","),
+  };
+
+  router.push({
+    name: state.planOnly
+      ? PROJECT_V1_ROUTE_PLAN_DETAIL
+      : PROJECT_V1_ROUTE_ISSUE_DETAIL,
+    params: {
+      projectId: extractProjectResourceName(project.name),
+      issueSlug: "create",
+      planSlug: "create",
+    },
+    query,
+  });
+};
+
+const handleDatabasesSelectionChanged = (
+  selectedDatabaseNameList: Set<string>
+) => {
+  state.selectedDatabaseNames = selectedDatabaseNameList;
+};
+
+const cancel = () => {
+  emit("dismiss");
+};
 </script>

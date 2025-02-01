@@ -1,0 +1,172 @@
+<template>
+  <div class="px-4 py-2 flex flex-col gap-y-2">
+    <div class="flex items-center justify-between">
+      <span class="textlabel">
+        {{ title }}
+      </span>
+
+      <div
+        v-if="!isCreating && allowEditIssue"
+        class="flex items-center gap-x-2"
+      >
+        <NButton v-if="!state.isEditing" size="tiny" @click.prevent="beginEdit">
+          {{ $t("common.edit") }}
+        </NButton>
+        <NButton
+          v-if="state.isEditing"
+          size="tiny"
+          :disabled="state.description === issue.description"
+          :loading="state.isUpdating"
+          @click.prevent="saveEdit"
+        >
+          {{ $t("common.save") }}
+        </NButton>
+        <NButton
+          v-if="state.isEditing"
+          size="tiny"
+          quaternary
+          @click.prevent="cancelEdit"
+        >
+          {{ $t("common.cancel") }}
+        </NButton>
+      </div>
+    </div>
+
+    <div class="text-sm">
+      <NInput
+        v-if="isCreating || state.isEditing"
+        ref="inputRef"
+        v-model:value="state.description"
+        :placeholder="$t('issue.add-some-description')"
+        :autosize="{ minRows: 3, maxRows: 10 }"
+        :disabled="state.isUpdating"
+        :loading="state.isUpdating"
+        style="
+          width: 100%;
+          --n-placeholder-color: rgb(var(--color-control-placeholder));
+        "
+        type="textarea"
+        size="small"
+        @update:value="onDescriptionChange"
+      />
+      <div
+        v-else
+        class="min-h-[3rem] max-h-[12rem] whitespace-pre-wrap px-[10px] py-[4.5px] text-sm"
+      >
+        <template v-if="issue.description">
+          <iframe
+            v-if="issue.description"
+            ref="contentPreviewArea"
+            :srcdoc="renderedContent"
+            class="rounded-md w-full overflow-hidden"
+          />
+        </template>
+        <span v-else class="text-control-placeholder">
+          {{ $t("issue.add-some-description") }}
+        </span>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import { NInput, NButton } from "naive-ui";
+import { computed, nextTick, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRenderMarkdown } from "@/components/MarkdownEditor";
+import { issueServiceClient } from "@/grpcweb";
+import { emitWindowEvent } from "@/plugins";
+import { pushNotification } from "@/store";
+import { Issue } from "@/types/proto/v1/issue_service";
+import { isGrantRequestIssue } from "@/utils";
+import { useIssueContext } from "../../logic";
+
+type LocalState = {
+  isEditing: boolean;
+  isUpdating: boolean;
+  description: string;
+};
+
+const { t } = useI18n();
+const { isCreating, issue, allowEditIssue } = useIssueContext();
+const contentPreviewArea = ref<HTMLIFrameElement>();
+
+const state = reactive<LocalState>({
+  isEditing: false,
+  isUpdating: false,
+  description: issue.value.description,
+});
+
+const inputRef = ref<InstanceType<typeof NInput>>();
+
+const title = computed(() => {
+  return isGrantRequestIssue(issue.value)
+    ? t("common.reason")
+    : t("common.description");
+});
+
+const onDescriptionChange = (description: string) => {
+  if (isCreating.value) {
+    issue.value.description = description;
+  }
+};
+
+const beginEdit = () => {
+  state.description = issue.value.description;
+  state.isEditing = true;
+  nextTick(() => {
+    inputRef.value?.focus();
+  });
+};
+
+const saveEdit = async () => {
+  try {
+    state.isUpdating = true;
+    const issuePatch = Issue.fromJSON({
+      ...issue.value,
+      description: state.description,
+    });
+    const updated = await issueServiceClient.updateIssue({
+      issue: issuePatch,
+      updateMask: ["description"],
+    });
+    Object.assign(issue.value, updated);
+    pushNotification({
+      module: "bytebase",
+      style: "SUCCESS",
+      title: t("common.updated"),
+    });
+    emitWindowEvent("bb.issue-field-update");
+    state.isEditing = false;
+  } finally {
+    state.isUpdating = false;
+  }
+};
+
+const cancelEdit = () => {
+  state.description = issue.value.description;
+  state.isEditing = false;
+};
+
+const { renderedContent } = useRenderMarkdown(
+  computed(() => issue.value.description),
+  contentPreviewArea,
+  computed(() => issue.value.projectEntity)
+);
+
+// Reset the edit state after creating the issue.
+watch(isCreating, (curr, prev) => {
+  if (!curr && prev) {
+    state.isEditing = false;
+  }
+});
+
+watch(
+  () => issue.value,
+  (issue) => {
+    if (state.isEditing) return;
+    state.description = issue.description;
+  },
+  { immediate: true }
+);
+</script>

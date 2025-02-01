@@ -1,103 +1,93 @@
 <template>
   <main
-    class="flex-1 relative z-0 overflow-auto focus:outline-none xl:order-last"
+    class="flex-1 h-full relative pb-8 focus:outline-none xl:order-last"
     tabindex="0"
   >
-    <article>
+    <NoPermissionPlaceholder
+      v-if="permissionStore.onlyWorkspaceMember && !isSelf"
+      class="mx-4"
+    />
+    <div v-else>
       <!-- Profile header -->
       <div>
-        <div class="h-32 w-full bg-accent lg:h-48"></div>
+        <div class="-m-6 h-32 bg-accent lg:h-48"></div>
         <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
           <div class="-mt-20 sm:flex sm:items-end sm:space-x-5">
-            <PrincipalAvatar :principal="principal" :size="'HUGE'" />
+            <UserAvatar :user="user" size="HUGE" />
             <div
               class="mt-6 sm:flex-1 sm:min-w-0 sm:flex sm:items-center sm:justify-end sm:space-x-6 sm:pb-1"
             >
-              <div class="mt-6 flex flex-row justify-stretch space-x-4">
-                <button v-if="false" type="button" class="btn-normal">
-                  <!-- Heroicon name: solid/mail -->
-                  <heroicons-solid:mail
-                    class="-ml-1 mr-2 h-5 w-5 text-control-light"
-                  />
-                  <span>Message</span>
-                </button>
+              <div class="mt-6 flex flex-row justify-stretch space-x-2">
                 <template v-if="allowEdit">
                   <template v-if="state.editing">
-                    <button
-                      type="button"
-                      class="btn-normal"
-                      @click.prevent="cancelEdit"
-                    >
+                    <NButton @click.prevent="cancelEdit">
                       {{ $t("common.cancel") }}
-                    </button>
-                    <button
-                      type="button"
-                      class="btn-normal"
+                    </NButton>
+                    <NButton
+                      type="primary"
                       :disabled="!allowSaveEdit"
                       @click.prevent="saveEdit"
                     >
-                      <!-- Heroicon name: solid/save -->
-                      <heroicons-solid:save
-                        class="-ml-1 mr-2 h-5 w-5 text-control-light"
-                      />
-                      <span>{{ $t("common.save") }}</span>
-                    </button>
+                      <template #icon>
+                        <heroicons-solid:save class="h-5 w-5" />
+                      </template>
+                      {{ $t("common.save") }}
+                    </NButton>
                   </template>
-                  <button
-                    v-else
-                    type="button"
-                    class="btn-normal"
-                    @click.prevent="editUser"
-                  >
-                    <!-- Heroicon name: solid/pencil -->
-                    <heroicons-solid:pencil
-                      class="-ml-1 mr-2 h-5 w-5 text-control-light"
-                    />
-                    <span>{{ $t("common.edit") }}</span>
-                  </button>
+                  <NButton v-else @click.prevent="editUser">
+                    <template #icon>
+                      <heroicons-solid:pencil
+                        class="h-5 w-5 text-control-light"
+                      />
+                    </template>
+                    {{ $t("common.edit") }}
+                  </NButton>
                 </template>
               </div>
             </div>
           </div>
           <div class="block mt-6 min-w-0 flex-1">
-            <input
+            <NInput
               v-if="state.editing"
-              id="name"
               ref="editNameTextField"
-              required
-              autocomplete="off"
-              name="name"
-              type="text"
-              class="textfield"
-              :value="state.editingPrincipal?.name"
-              @input="(e: any)=>updatePrincipal('name', e.target.value)"
+              :input-props="{ autocomplete: 'off' }"
+              :value="state.editingUser?.title"
+              style="width: 16rem"
+              size="large"
+              @update:value="updateUser('title', $event)"
             />
-            <!-- pb-1.5 is to avoid flicking when entering/existing the editing state -->
             <h1 v-else class="pb-1.5 text-2xl font-bold text-main truncate">
-              {{ principal.name }}
+              {{ user.title }}
             </h1>
+            <ServiceAccountTag
+              v-if="user.userType === UserType.SERVICE_ACCOUNT"
+            />
           </div>
         </div>
       </div>
 
       <!-- Description list -->
       <div
-        v-if="principal.type == 'END_USER'"
+        v-if="user.userType === UserType.USER"
         class="mt-6 mb-2 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8"
       >
-        <dl class="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-2">
+        <dl class="grid grid-cols-1 gap-x-4 gap-y-8 sm:grid-cols-3">
           <div class="sm:col-span-1">
             <dt class="text-sm font-medium text-control-light">
               {{ $t("settings.profile.role") }}
             </dt>
             <dd class="mt-1 text-sm text-main">
-              <router-link
-                :to="'/setting/member'"
-                class="normal-link capitalize"
-                >{{
-                  $t(`common.role.${principal.role.toLowerCase()}`)
-                }}</router-link
+              <div
+                class="flex flex-row justify-start items-start flex-wrap gap-2"
               >
+                <NTag
+                  v-for="role in sortRoles(userRoles)"
+                  :key="role"
+                  size="large"
+                >
+                  {{ displayRoleTitle(role) }}
+                </NTag>
+              </div>
               <router-link
                 v-if="!hasRBACFeature"
                 :to="'/setting/subscription'"
@@ -112,204 +102,407 @@
             <dt class="text-sm font-medium text-control-light">
               {{ $t("settings.profile.email") }}
             </dt>
-            <dd class="mt-1 text-sm text-main">{{ principal.email }}</dd>
+            <dd class="mt-1 text-sm text-main">
+              <EmailInput
+                v-if="state.editing"
+                v-model:value="state.editingUser!.email"
+                :domain="workspaceDomain"
+              />
+              <template v-else>
+                {{ user.email }}
+              </template>
+            </dd>
           </div>
 
-          <template v-if="state.editing">
-            <div class="sm:col-span-1">
-              <dt class="text-sm font-medium text-control-light">
-                {{ $t("settings.profile.password") }}
-              </dt>
-              <dd class="mt-1 text-sm text-main">
-                <input
-                  id="password"
-                  name="password"
-                  type="text"
-                  class="textfield mt-1 w-full"
-                  autocomplete="off"
-                  :placeholder="$t('common.sensitive-placeholder')"
-                  :value="state.editingPrincipal?.password"
-                  @input="(e: any) => updatePrincipal('password', e.target.value)"
-                />
-              </dd>
-            </div>
+          <div class="sm:col-span-1">
+            <dt class="text-sm font-medium text-control-light">
+              {{ $t("settings.profile.phone") }}
+            </dt>
+            <dd class="mt-1 text-sm text-main">
+              <NInput
+                v-if="state.editing"
+                :value="state.editingUser?.phone"
+                :placeholder="$t('settings.profile.phone-tips')"
+                :input-props="{ autocomplete: 'off', type: 'tel' }"
+                @update:value="updateUser('phone', $event)"
+              />
+              <template v-else>
+                {{ user.phone }}
+              </template>
+            </dd>
+          </div>
 
-            <div class="sm:col-span-1">
-              <dt class="text-sm font-medium text-control-light">
-                {{ $t("settings.profile.password-confirm") }}
-                <span v-if="passwordMismatch" class="text-error">{{
-                  $t("settings.profile.password-mismatch")
-                }}</span>
-              </dt>
-              <dd class="mt-1 text-sm text-main">
-                <input
-                  id="password-confirm"
-                  name="password-confirm"
-                  type="text"
-                  class="textfield mt-1 w-full"
-                  autocomplete="off"
-                  :placeholder="
-                    $t('settings.profile.password-confirm-placeholder')
-                  "
-                  :value="state.passwordConfirm"
-                  @input="(e: any) => state.passwordConfirm = e.target.value"
-                />
-              </dd>
-            </div>
-          </template>
+          <div v-if="state.editing" class="col-span-2">
+            <UserPassword
+              v-if="state.editingUser"
+              ref="userPasswordRef"
+              v-model:password="state.editingUser.password"
+              v-model:password-confirm="state.passwordConfirm"
+              :password-restriction="passwordRestrictionSetting"
+            />
+          </div>
         </dl>
       </div>
-    </article>
+
+      <!-- 2FA setting section -->
+      <div
+        v-if="allowEdit"
+        class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 border-t mt-16 pt-8 pb-4"
+      >
+        <div class="w-full flex flex-row justify-between items-center">
+          <span
+            class="text-lg font-medium flex flex-row justify-start items-center"
+          >
+            {{ $t("two-factor.self") }}
+            <FeatureBadge :feature="'bb.feature.2fa'" custom-class="ml-2" />
+          </span>
+          <div class="space-x-2">
+            <NButton
+              v-if="user.email === currentUserV1.email"
+              @click="enable2FA"
+            >
+              {{ isMFAEnabled ? $t("common.edit") : $t("common.enable") }}
+            </NButton>
+            <NButton v-if="isMFAEnabled" @click="disable2FA">
+              {{ $t("common.disable") }}
+            </NButton>
+          </div>
+        </div>
+        <p class="mt-4 text-sm text-gray-500">
+          {{ $t("two-factor.description") }}
+          <LearnMoreLink
+            class="ml-1"
+            url="https://www.bytebase.com/docs/administration/2fa?source=console"
+          />
+        </p>
+        <template v-if="showRegenerateRecoveryCodes">
+          <div class="w-full flex flex-row justify-between items-center mt-8">
+            <span class="text-lg font-medium">
+              {{ $t("two-factor.recovery-codes.self") }}
+            </span>
+            <div v-if="!state.showRegenerateRecoveryCodesView" class="relative">
+              <NDropdown
+                trigger="click"
+                :options="dropDownOptions"
+                placement="bottom-end"
+              >
+                <heroicons-outline:ellipsis-horizontal
+                  class="w-8 p-1 h-auto cursor-pointer hover:bg-gray-100 rounded"
+                />
+              </NDropdown>
+            </div>
+          </div>
+          <p class="mt-4 text-sm text-gray-500">
+            {{ $t("two-factor.recovery-codes.description") }}
+          </p>
+          <RegenerateRecoveryCodesView
+            v-if="state.showRegenerateRecoveryCodesView"
+            :recovery-codes="authStore.currentUser.recoveryCodes"
+            @close="state.showRegenerateRecoveryCodesView = false"
+          />
+        </template>
+      </div>
+    </div>
   </main>
+
+  <FeatureModal
+    feature="bb.feature.2fa"
+    :open="state.showFeatureModal"
+    @cancel="state.showFeatureModal = false"
+  />
+
+  <!-- Close modal confirm dialog -->
+  <ActionConfirmModal
+    v-model:show="state.showDisable2FAConfirmModal"
+    :title="$t('two-factor.disable.self')"
+    :description="$t('two-factor.disable.description')"
+    :positive-button-props="{
+      type: 'error',
+    }"
+    @confirm="handleDisable2FA"
+  />
 </template>
 
-<script lang="ts">
+<script lang="ts" setup>
+import { useTitle } from "@vueuse/core";
+import { cloneDeep, head, isEqual } from "lodash-es";
+import type { DropdownOption } from "naive-ui";
+import { NButton, NInput, NDropdown, NTag } from "naive-ui";
+import { nextTick, computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
+import EmailInput from "@/components/EmailInput.vue";
+import { FeatureModal } from "@/components/FeatureGuard";
+import FeatureBadge from "@/components/FeatureGuard/FeatureBadge.vue";
+import LearnMoreLink from "@/components/LearnMoreLink.vue";
+import RegenerateRecoveryCodesView from "@/components/RegenerateRecoveryCodesView.vue";
+import { ActionConfirmModal } from "@/components/SchemaEditorLite";
+import UserPassword from "@/components/User/Settings/UserPassword.vue";
+import UserAvatar from "@/components/User/UserAvatar.vue";
+import NoPermissionPlaceholder from "@/components/misc/NoPermissionPlaceholder.vue";
+import ServiceAccountTag from "@/components/misc/ServiceAccountTag.vue";
+import { WORKSPACE_ROUTE_USER_PROFILE } from "@/router/dashboard/workspaceRoutes";
+import { SETTING_ROUTE_PROFILE_TWO_FACTOR } from "@/router/dashboard/workspaceSetting";
 import {
-  nextTick,
-  computed,
-  onMounted,
-  onUnmounted,
-  reactive,
-  ref,
-  defineComponent,
-} from "vue";
-import { useStore } from "vuex";
-import cloneDeep from "lodash-es/cloneDeep";
-import isEmpty from "lodash-es/isEmpty";
-import isEqual from "lodash-es/isEqual";
-import PrincipalAvatar from "../components/PrincipalAvatar.vue";
-import { Principal, PrincipalPatch } from "../types";
-import { isOwner } from "../utils";
+  featureToRef,
+  pushNotification,
+  useActuatorV1Store,
+  useAuthStore,
+  useCurrentUserV1,
+  useSettingV1Store,
+  useUserStore,
+  useWorkspaceV1Store,
+  usePermissionStore,
+} from "@/store";
+import {
+  unknownUser,
+  SYSTEM_BOT_USER_NAME,
+  ALL_USERS_USER_EMAIL,
+} from "@/types";
+import {
+  UpdateUserRequest,
+  UserType,
+  type User,
+} from "@/types/proto/v1/auth_service";
+import { State } from "@/types/proto/v1/common";
+import { displayRoleTitle, hasWorkspacePermissionV2, sortRoles } from "@/utils";
 
 interface LocalState {
   editing: boolean;
-  editingPrincipal?: PrincipalPatch;
-  passwordConfirm?: string;
+  editingUser?: User;
+  passwordConfirm: string;
+  showFeatureModal: boolean;
+  showDisable2FAConfirmModal: boolean;
+  showRegenerateRecoveryCodesView: boolean;
 }
 
-export default defineComponent({
-  name: "ProfileDashboard",
-  components: { PrincipalAvatar },
-  props: {
-    principalId: {
-      type: String,
-      default: undefined,
+const props = defineProps<{
+  principalEmail?: string;
+}>();
+
+const { t } = useI18n();
+const router = useRouter();
+const actuatorStore = useActuatorV1Store();
+const settingV1Store = useSettingV1Store();
+const authStore = useAuthStore();
+const currentUserV1 = useCurrentUserV1();
+const userStore = useUserStore();
+const workspaceStore = useWorkspaceV1Store();
+const permissionStore = usePermissionStore();
+
+const state = reactive<LocalState>({
+  editing: false,
+  passwordConfirm: "",
+  showFeatureModal: false,
+  showDisable2FAConfirmModal: false,
+  showRegenerateRecoveryCodesView: false,
+});
+
+const editNameTextField = ref<InstanceType<typeof NInput>>();
+const userPasswordRef = ref<InstanceType<typeof UserPassword>>();
+
+const workspaceDomain = computed(() =>
+  head(settingV1Store.workspaceProfileSetting?.domains)
+);
+
+const passwordRestrictionSetting = computed(
+  () => settingV1Store.passwordRestriction
+);
+
+const keyboardHandler = (e: KeyboardEvent) => {
+  if (state.editing) {
+    if (e.code === "Escape") {
+      cancelEdit();
+    } else if (e.code === "Enter" && e.metaKey) {
+      if (allowSaveEdit.value) {
+        saveEdit();
+      }
+    }
+  }
+};
+
+onMounted(async () => {
+  document.addEventListener("keydown", keyboardHandler);
+});
+
+onUnmounted(() => {
+  document.removeEventListener("keydown", keyboardHandler);
+});
+
+const hasRBACFeature = featureToRef("bb.feature.rbac");
+const has2FAFeature = featureToRef("bb.feature.2fa");
+
+const isMFAEnabled = computed(() => {
+  return user.value.mfaEnabled;
+});
+
+// only user can regenerate their recovery-codes.
+const showRegenerateRecoveryCodes = computed(() => {
+  return user.value.mfaEnabled && user.value.name === currentUserV1.value.name;
+});
+
+const user = computed(() => {
+  if (props.principalEmail) {
+    return userStore.getUserByEmail(props.principalEmail) ?? unknownUser();
+  }
+  return currentUserV1.value;
+});
+
+const userRoles = computed(() => {
+  return [...workspaceStore.getWorkspaceRolesByEmail(user.value.email)];
+});
+
+const isSelf = computed(() => currentUserV1.value.name === user.value.name);
+
+// User can change her own info.
+// Besides, owner can also change anyone's info. This is for resetting password in case user forgets.
+const allowEdit = computed(() => {
+  if (
+    user.value.name === SYSTEM_BOT_USER_NAME ||
+    user.value.email === ALL_USERS_USER_EMAIL
+  ) {
+    return false;
+  }
+  if (user.value.state !== State.ACTIVE) {
+    return false;
+  }
+  return isSelf.value || hasWorkspacePermissionV2("bb.policies.update");
+});
+
+const allowSaveEdit = computed(() => {
+  return (
+    !isEqual(user.value, state.editingUser) &&
+    !userPasswordRef.value?.passwordHint &&
+    !userPasswordRef.value?.passwordMismatch
+  );
+});
+
+onMounted(async () => {
+  if (props.principalEmail) {
+    await useUserStore().getOrFetchUserById(props.principalEmail);
+  }
+});
+
+const updateUser = <K extends keyof User>(field: K, value: User[K]) => {
+  if (!state.editingUser) return;
+
+  state.editingUser[field] = value;
+};
+
+const editUser = () => {
+  state.editingUser = cloneDeep(user.value);
+  state.editing = true;
+  state.passwordConfirm = "";
+
+  nextTick(() => editNameTextField.value?.focus());
+};
+
+const cancelEdit = () => {
+  state.editingUser = undefined;
+  state.editing = false;
+};
+
+const saveEdit = async () => {
+  const userPatch = state.editingUser;
+  if (!userPatch) return;
+
+  const updateMask: string[] = [];
+  if (userPatch.title !== user.value.title) {
+    updateMask.push("title");
+  }
+  if (userPatch.email !== user.value.email) {
+    updateMask.push("email");
+  }
+  if (userPatch.phone !== user.value.phone) {
+    updateMask.push("phone");
+  }
+  if (userPatch.password !== "") {
+    updateMask.push("password");
+  }
+  try {
+    await userStore.updateUser({
+      user: userPatch,
+      updateMask,
+      regenerateRecoveryCodes: false,
+      regenerateTempMfaSecret: false,
+    });
+  } catch (error) {
+    pushNotification({
+      module: "bytebase",
+      style: "CRITICAL",
+      title: (error as any).details || "Failed to update user",
+    });
+    return;
+  }
+  await useAuthStore().refreshUserIfNeeded(currentUserV1.value.name);
+
+  state.editingUser = undefined;
+  state.editing = false;
+
+  // If we update email, we need to redirect to the new email.
+  if (updateMask.includes("email") && props.principalEmail) {
+    router.replace({
+      name: WORKSPACE_ROUTE_USER_PROFILE,
+      params: {
+        principalEmail: userPatch.email,
+      },
+    });
+  }
+};
+
+const enable2FA = () => {
+  if (!has2FAFeature.value) {
+    state.showFeatureModal = true;
+    return;
+  }
+  router.push({ name: SETTING_ROUTE_PROFILE_TWO_FACTOR });
+};
+
+const disable2FA = () => {
+  if (
+    actuatorStore.serverInfo?.require2fa &&
+    !hasWorkspacePermissionV2("bb.policies.update")
+  ) {
+    pushNotification({
+      module: "bytebase",
+      style: "WARN",
+      title: t("two-factor.messages.cannot-disable"),
+    });
+  } else {
+    state.showDisable2FAConfirmModal = true;
+  }
+};
+
+const handleDisable2FA = async () => {
+  await userStore.updateUser(
+    UpdateUserRequest.fromPartial({
+      user: {
+        name: user.value.name,
+        mfaEnabled: false,
+      },
+      updateMask: ["mfa_enabled"],
+    })
+  );
+  await userStore.fetchUser(user.value.name, true /* slient */);
+  state.showDisable2FAConfirmModal = false;
+  pushNotification({
+    module: "bytebase",
+    style: "SUCCESS",
+    title: t("two-factor.messages.2fa-disabled"),
+  });
+};
+
+const dropDownOptions = computed((): DropdownOption[] => [
+  {
+    label: t("common.regenerate"),
+    key: "regenerate",
+    props: {
+      onClick: () => {
+        state.showRegenerateRecoveryCodesView = true;
+      },
     },
   },
-  setup(props) {
-    const editNameTextField = ref();
+]);
 
-    const store = useStore();
-
-    const state = reactive<LocalState>({
-      editing: false,
-    });
-
-    const keyboardHandler = (e: KeyboardEvent) => {
-      if (state.editing) {
-        if (e.code == "Escape") {
-          cancelEdit();
-        } else if (e.code == "Enter" && e.metaKey) {
-          if (allowSaveEdit.value) {
-            saveEdit();
-          }
-        }
-      }
-    };
-
-    onMounted(() => {
-      document.addEventListener("keydown", keyboardHandler);
-    });
-
-    onUnmounted(() => {
-      document.removeEventListener("keydown", keyboardHandler);
-    });
-
-    const currentUser = computed(
-      (): Principal => store.getters["auth/currentUser"]()
-    );
-
-    const hasRBACFeature = computed(() =>
-      store.getters["subscription/feature"]("bb.feature.rbac")
-    );
-
-    const principal = computed(() => {
-      if (props.principalId) {
-        return store.getters["principal/principalById"](
-          parseInt(props.principalId)
-        );
-      }
-      return currentUser.value;
-    });
-
-    const passwordMismatch = computed(() => {
-      return (
-        !isEmpty(state.editingPrincipal?.password) &&
-        state.editingPrincipal?.password != state.passwordConfirm
-      );
-    });
-
-    // User can change her own info.
-    // Besides, owner can also change anyone's info. This is for resetting password in case user forgets.
-    const allowEdit = computed(() => {
-      return (
-        currentUser.value.id == principal.value.id ||
-        isOwner(currentUser.value.role)
-      );
-    });
-
-    const allowSaveEdit = computed(() => {
-      return (
-        !isEqual(principal.value, state.editingPrincipal) &&
-        (state.passwordConfirm == "" ||
-          state.passwordConfirm == state.editingPrincipal?.password)
-      );
-    });
-
-    const updatePrincipal = (field: string, value: string) => {
-      (state.editingPrincipal as any)[field] = value;
-    };
-
-    const editUser = () => {
-      const clone = cloneDeep(principal.value);
-      state.editingPrincipal = {
-        name: clone.name,
-      };
-      state.editing = true;
-
-      nextTick(() => editNameTextField.value.focus());
-    };
-
-    const cancelEdit = () => {
-      state.editingPrincipal = undefined;
-      state.editing = false;
-    };
-
-    const saveEdit = () => {
-      store
-        .dispatch("principal/patchPrincipal", {
-          principalId: principal.value.id,
-          principalPatch: state.editingPrincipal,
-        })
-        .then(() => {
-          state.editingPrincipal = undefined;
-          state.editing = false;
-        });
-    };
-
-    return {
-      editNameTextField,
-      state,
-      hasRBACFeature,
-      principal,
-      allowEdit,
-      allowSaveEdit,
-      passwordMismatch,
-      updatePrincipal,
-      editUser,
-      cancelEdit,
-      saveEdit,
-    };
-  },
-});
+useTitle(user.value.title);
 </script>

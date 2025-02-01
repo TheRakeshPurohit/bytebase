@@ -1,0 +1,208 @@
+<template>
+  <div class="w-full">
+    <div
+      class="w-full flex flex-col lg:flex-row items-start lg:items-center justify-between gap-2"
+    >
+      <div class="flex flex-1 max-w-full items-center gap-x-2">
+        <IssueSearch
+          v-model:params="state.params"
+          class="flex-1"
+          :readonly-scopes="readonlyScopes"
+          :override-scope-id-list="overrideSearchScopeIdList"
+        >
+          <template #searchbox-suffix>
+            <NTooltip :disabled="allowExportData">
+              <template #trigger>
+                <NButton
+                  type="primary"
+                  :disabled="!allowExportData"
+                  @click="state.showRequestExportPanel = true"
+                >
+                  <template #icon>
+                    <DownloadIcon class="h-4 w-4" />
+                  </template>
+                  {{ $t("quick-action.request-export-data") }}
+                </NButton>
+              </template>
+              {{ $t("export-center.permission-denied") }}
+            </NTooltip>
+          </template>
+        </IssueSearch>
+      </div>
+    </div>
+
+    <div class="relative w-full mt-4 min-h-[20rem]">
+      <PagedTable
+        ref="issuePagedTable"
+        :session-key="'export-center'"
+        :page-size="50"
+        :fetch-list="fetchIssueList"
+      >
+        <template #table="{ list, loading }">
+          <DataExportIssueDataTable
+            :loading="loading"
+            :issue-list="list"
+            :highlight-text="state.params.query"
+            :show-project="!specificProject"
+          />
+        </template>
+      </PagedTable>
+    </div>
+  </div>
+
+  <Drawer
+    :auto-focus="true"
+    :show="state.showRequestExportPanel"
+    @close="state.showRequestExportPanel = false"
+  >
+    <DataExportPrepForm
+      :project-name="specificProject.name"
+      @dismiss="state.showRequestExportPanel = false"
+    />
+  </Drawer>
+</template>
+
+<script lang="ts" setup>
+import { DownloadIcon } from "lucide-vue-next";
+import { NButton, NTooltip } from "naive-ui";
+import { computed, reactive, ref, watch } from "vue";
+import type { ComponentExposed } from "vue-component-type-helpers";
+import DataExportPrepForm from "@/components/DataExportPrepForm";
+import IssueSearch from "@/components/IssueV1/components/IssueSearch/IssueSearch.vue";
+import { Drawer } from "@/components/v2";
+import PagedTable from "@/components/v2/Model/PagedTable.vue";
+import {
+  useCurrentUserV1,
+  useProjectV1Store,
+  useIssueV1Store,
+  useRefreshIssueList,
+} from "@/store";
+import { projectNamePrefix } from "@/store/modules/v1/common";
+import type { ComposedIssue } from "@/types";
+import { Issue_Type } from "@/types/proto/v1/issue_service";
+import {
+  buildIssueFilterBySearchParams,
+  extractProjectResourceName,
+  hasPermissionToCreateDataExportIssueInProject,
+  type SearchParams,
+  type SearchScope,
+  type SearchScopeId,
+} from "@/utils";
+import DataExportIssueDataTable from "./DataExportIssueDataTable";
+
+const props = defineProps<{
+  projectId: string;
+}>();
+
+interface LocalState {
+  showRequestExportPanel: boolean;
+  params: SearchParams;
+}
+
+const specificProject = computed(() => {
+  return projectV1Store.getProjectByName(
+    `${projectNamePrefix}${props.projectId}`
+  );
+});
+
+const readonlyScopes = computed((): SearchScope[] => {
+  return [
+    {
+      id: "project",
+      value: extractProjectResourceName(specificProject.value.name),
+    },
+  ];
+});
+
+const defaultSearchParams = () => {
+  const params: SearchParams = {
+    query: "",
+    scopes: [...readonlyScopes.value, { id: "status", value: "OPEN" }],
+  };
+  return params;
+};
+
+const currentUser = useCurrentUserV1();
+const projectV1Store = useProjectV1Store();
+const state = reactive<LocalState>({
+  showRequestExportPanel: false,
+  params: defaultSearchParams(),
+});
+const issueStore = useIssueV1Store();
+const issuePagedTable =
+  ref<ComponentExposed<typeof PagedTable<ComposedIssue>>>();
+
+const dataExportIssueSearchParams = computed(() => {
+  // Default scopes with type and creator.
+  const defaultScopes = [
+    {
+      id: "creator",
+      value: currentUser.value.email,
+    },
+  ];
+  // If specific project is provided, add project scope.
+  if (specificProject.value) {
+    defaultScopes.push({
+      id: "project",
+      value: extractProjectResourceName(specificProject.value.name),
+    });
+  }
+  return {
+    query: state.params.query,
+    scopes: [...state.params.scopes, ...defaultScopes],
+  } as SearchParams;
+});
+
+const overrideSearchScopeIdList = computed(() => {
+  const defaultScopeIdList: SearchScopeId[] = [
+    "status",
+    "instance",
+    "database",
+    "label",
+  ];
+  return defaultScopeIdList;
+});
+
+const mergedIssueFilter = computed(() => {
+  return buildIssueFilterBySearchParams(dataExportIssueSearchParams.value, {
+    type: Issue_Type.DATABASE_DATA_EXPORT,
+  });
+});
+
+const fetchIssueList = async ({
+  pageToken,
+  pageSize,
+}: {
+  pageToken: string;
+  pageSize: number;
+}) => {
+  const { nextPageToken, issues } = await issueStore.listIssues(
+    {
+      find: mergedIssueFilter.value,
+      pageSize,
+      pageToken,
+    },
+    { withRollout: true }
+  );
+  return {
+    nextPageToken,
+    list: issues,
+  };
+};
+
+watch(
+  () => JSON.stringify(mergedIssueFilter.value),
+  () => issuePagedTable.value?.refresh()
+);
+useRefreshIssueList(() => issuePagedTable.value?.refresh());
+
+const allowExportData = computed(() => {
+  if (specificProject.value) {
+    return hasPermissionToCreateDataExportIssueInProject(specificProject.value);
+  }
+
+  return projectV1Store.projectList.some((project) =>
+    hasPermissionToCreateDataExportIssueInProject(project)
+  );
+});
+</script>

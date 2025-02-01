@@ -1,4 +1,6 @@
-import { BBNotificationStyle } from "../bbkit/types";
+import type { VNodeChild } from "vue";
+
+export type BBNotificationStyle = "INFO" | "SUCCESS" | "WARN" | "CRITICAL";
 
 export type Notification = {
   id: string;
@@ -6,7 +8,7 @@ export type Notification = {
   module: string;
   style: BBNotificationStyle;
   title: string;
-  description?: string;
+  description?: string | (() => VNodeChild);
   link?: string;
   linkTitle?: string;
   manualHide?: boolean;

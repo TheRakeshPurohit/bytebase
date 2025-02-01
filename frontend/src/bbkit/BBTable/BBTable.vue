@@ -14,7 +14,12 @@
           :key="index"
           scope="col"
           class="py-2 text-left text-xs font-medium text-gray-500 tracking-wider"
-          :class="index == 0 ? 'pl-4' : 'pl-2'"
+          :class="[
+            headerClass,
+            index == 0 ? 'pl-4' : 'pl-2',
+            column.center && 'text-center pr-2',
+            column.nowrap && 'whitespace-nowrap',
+          ]"
         >
           {{ column.title }}
         </th>
@@ -29,14 +34,16 @@
             :colspan="columnList.length"
             class="text-left pl-4 pt-4 pb-2 py-text-base leading-6 font-medium text-gray-900"
           >
-            <template v-if="section.link">
-              <router-link :to="section.link" class="normal-link">
+            <slot name="sectionHeader" :section="section">
+              <template v-if="section.link">
+                <router-link :to="section.link" class="normal-link">
+                  {{ section.title }}
+                </router-link>
+              </template>
+              <template v-else>
                 {{ section.title }}
-              </router-link>
-            </template>
-            <template v-else>
-              {{ section.title }}
-            </template>
+              </template>
+            </slot>
           </th>
           <template v-if="section.list.length > 0">
             <tr v-if="showHeader" class="bg-gray-50">
@@ -47,23 +54,25 @@
               :key="j"
               :class="rowClickable ? 'cursor-pointer hover:bg-gray-200' : ''"
               @click.stop="
-                () => {
+                (e) => {
                   if (rowClickable) {
-                    $emit('click-row', i, j);
+                    $emit('click-row', i, j, e);
                   }
                 }
               "
             >
-              <slot name="body" :rowData="item" />
+              <slot name="body" :row-data="item" :section="i" :row="j" />
             </tr>
           </template>
           <template v-else>
-            <tr>
+            <tr v-if="showPlaceholder">
               <td
                 :colspan="columnList.length"
                 class="text-center text-gray-400"
               >
-                -
+                <slot name="placeholder">
+                  <p class="py-8">{{ $t("common.no-data") }}</p>
+                </slot>
               </td>
             </tr>
           </template>
@@ -72,27 +81,41 @@
     </template>
     <template v-else>
       <tbody class="bg-normal divide-y divide-block-border">
-        <tr
-          v-for="(item, index) in dataSource"
-          :key="index"
-          :class="rowClickable ? 'cursor-pointer hover:bg-gray-200' : ''"
-          @click.stop="
-            () => {
-              if (rowClickable) {
-                $emit('click-row', 0, index);
+        <template v-if="dataSource.length > 0">
+          <tr
+            v-for="(item, index) in dataSource"
+            :key="index"
+            :class="rowClickable ? 'cursor-pointer hover:bg-gray-200' : ''"
+            @click.stop="
+              (e) => {
+                if (rowClickable) {
+                  $emit('click-row', 0, index, e);
+                }
               }
-            }
-          "
-        >
-          <slot name="body" :rowData="item" />
-        </tr></tbody
-    ></template>
+            "
+          >
+            <slot name="body" :row-data="item" :row="index" />
+          </tr>
+        </template>
+        <template v-else>
+          <tr v-if="showPlaceholder">
+            <td :colspan="columnList.length" class="text-center text-gray-400">
+              <slot name="placeholder">
+                <p class="py-8">{{ $t("common.no-data") }}</p>
+              </slot>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </template>
+    <slot name="footer" />
   </table>
 </template>
 
 <script lang="ts" setup>
-import { computed, withDefaults } from "vue";
-import { BBTableColumn, BBTableSectionDataSource } from "../types";
+import { computed } from "vue";
+import type { VueClass } from "@/utils";
+import type { BBTableColumn, BBTableSectionDataSource } from "../types";
 
 type DataType = any; // vue does not support generic typed components yet
 
@@ -107,11 +130,13 @@ const props = withDefaults(
     compactSection?: boolean;
     showHeader?: boolean;
     customHeader?: boolean;
+    headerClass?: VueClass;
     rowClickable?: boolean;
     leftBordered?: boolean;
     rightBordered?: boolean;
     topBordered?: boolean;
     bottomBordered?: boolean;
+    showPlaceholder?: boolean;
   }>(),
   {
     columnList: () => [],
@@ -120,16 +145,18 @@ const props = withDefaults(
     compactSection: false,
     showHeader: true,
     customHeader: false,
+    headerClass: undefined,
     rowClickable: true,
     leftBordered: true,
     rightBordered: true,
     topBordered: true,
     bottomBordered: true,
+    showPlaceholder: true,
   }
 );
 
 defineEmits<{
-  (event: "click-row", section: number, row: number): void;
+  (event: "click-row", section: number, row: number, e: MouseEvent): void;
 }>();
 
 const borderVisibility = computed(() => {

@@ -1,0 +1,103 @@
+- statement: |-
+    CREATE TABLE MyTable (
+      id INT,
+      creator_id INT,
+      created_ts INT,
+      updated_ts INT,
+      updater_id INT
+    );
+  changeType: 0
+- statement: |-
+    CREATE TABLE t (
+      name TEXT,
+      age INT
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 401
+      title: column.required
+      content: Table t missing required column "created_ts"
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+    - status: 2
+      code: 401
+      title: column.required
+      content: Table t missing required column "creator_id"
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+    - status: 2
+      code: 401
+      title: column.required
+      content: Table t missing required column "id"
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+    - status: 2
+      code: 401
+      title: column.required
+      content: Table t missing required column "updated_ts"
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+    - status: 2
+      code: 401
+      title: column.required
+      content: Table t missing required column "updater_id"
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE t (
+      id INT,
+      creator_id INT,
+      created_ts INT,
+      updater_id INT
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 401
+      title: column.required
+      content: Table t missing required column "updated_ts"
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: ALTER TABLE t DROP COLUMN created_ts;
+  changeType: 0
+  want:
+    - status: 2
+      code: 401
+      title: column.required
+      content: Table t missing required column "created_ts"
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: ALTER TABLE t DROP COLUMN creator_id;
+  changeType: 0
+  want:
+    - status: 2
+      code: 401
+      title: column.required
+      content: Table t missing required column "creator_id"
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

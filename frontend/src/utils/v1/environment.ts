@@ -1,0 +1,16 @@
+import { State } from "@/types/proto/v1/common";
+import type { Environment } from "@/types/proto/v1/environment_service";
+
+export const extractEnvironmentResourceName = (name: string) => {
+  const pattern = /(?:^|\/)environments\/([^/]+)(?:$|\/)/;
+  const matches = name.match(pattern);
+  return matches?.[1] ?? "";
+};
+
+export function environmentV1Name(environment: Environment) {
+  const parts = [environment.title];
+  if (environment.state === State.DELETED) {
+    parts.push("(Archived)");
+  }
+  return parts.join(" ");
+}

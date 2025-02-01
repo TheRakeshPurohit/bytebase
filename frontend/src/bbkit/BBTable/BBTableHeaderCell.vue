@@ -9,7 +9,8 @@
 </template>
 
 <script lang="ts" setup>
-import { withDefaults, computed } from "vue";
+import { computed } from "vue";
+
 const props = withDefaults(
   defineProps<{
     title?: string;

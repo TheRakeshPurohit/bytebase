@@ -1,0 +1,19 @@
+- statement: |
+    SELECT * FROM employee WHERE name = 'Jack' AND id IS NULL;
+  changeType: 0
+- statement: |
+    UPDATE employee SET name = NULL;
+  changeType: 0
+- statement: |
+    SELECT * FROM t WHERE name = 'test' AND id = NULL;
+  changeType: 0
+  want:
+    - status: 2
+      code: 221
+      title: statement.where.no-equal-null
+      content: 'WHERE clause contains equal null: SELECT * FROM t WHERE name = ''test'' AND id = NULL;'
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

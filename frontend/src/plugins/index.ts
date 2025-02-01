@@ -1,2 +1,2 @@
-export * from "./issue/template";
-export * from "./types";
+export * from "./issue";
+export * from "./window-events";

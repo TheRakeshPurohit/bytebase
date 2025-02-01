@@ -1,214 +1,63 @@
-import { countBy, groupBy, uniqBy } from "lodash-es";
-import {
-  Database,
-  DatabaseLabel,
-  DeploymentSchedule,
-  Label,
-  LabelKeyType,
-  LabelSelector,
-  LabelSelectorRequirement,
-  LabelValueType,
-} from "../types";
+import { orderBy, uniq } from "lodash-es";
+import { useEnvironmentV1Store } from "@/store";
+import type { ComposedDatabase } from "@/types";
+import { extractEnvironmentResourceName } from "./v1";
 
-// reserved labels (e.g. bb.environment) have zero ID and their values are immutable.
-// see api/label.go for more details
-export const RESERVED_LABEL_ID = 0;
+export const MAX_LABEL_VALUE_LENGTH = 63;
 
-export const isReservedLabel = (label: Label): boolean => {
-  return label.id === RESERVED_LABEL_ID;
-};
-
-export const isReservedDatabaseLabel = (
-  dbLabel: DatabaseLabel,
-  labelList: Label[]
-): boolean => {
-  const label = labelList.find((label) => label.key === dbLabel.key);
-  if (!label) return false;
-  return label.id === RESERVED_LABEL_ID;
-};
-
-export const hidePrefix = (key: LabelKeyType): LabelKeyType => {
-  return key.replace(/^bb\./, "");
-};
-
-export const getLabelValue = (
-  db: Database,
-  key: LabelKeyType
-): LabelValueType => {
-  const label = db.labels.find((target) => target.key === key);
-  if (!label) return "";
-  return label.value;
-};
-
-export const groupingDatabaseListByLabelKey = (
-  databaseList: Database[],
-  key: LabelKeyType,
-  emptyValue: LabelValueType = ""
-): Array<{ labelValue: LabelValueType; databaseList: Database[] }> => {
-  const dict = groupBy(databaseList, (db) => {
-    const label = db.labels.find((target) => target.key === key);
-    if (!label) return emptyValue;
-    return label.value;
-  });
-  return Object.keys(dict).map((value) => ({
-    labelValue: value,
-    databaseList: dict[value],
-  }));
-};
-
-export const validateLabels = (labels: DatabaseLabel[]): string | undefined => {
-  for (let i = 0; i < labels.length; i++) {
-    const label = labels[i];
-    if (!label.key) return "label.error.key-necessary";
-    if (!label.value) return "label.error.value-necessary";
-  }
-  if (labels.length !== uniqBy(labels, "key").length) {
-    return "label.error.key-duplicated";
-  }
-  return undefined;
-};
-
-export const validateLabelsWithTemplate = (
-  labelList: DatabaseLabel[],
-  requiredLabelDict: Set<LabelKeyType>
+export const convertLabelsToKVList = (
+  labels: Record<string, string>,
+  sort = true
 ) => {
-  for (const key of requiredLabelDict.values()) {
-    const value = labelList.find((label) => label.key === key)?.value;
-    if (!value) return false;
+  const list = Object.keys(labels).map((key) => ({
+    key,
+    value: labels[key],
+  }));
+
+  if (sort) {
+    return orderBy(list, (kv) => kv.key, "asc");
   }
-  return true;
+  return list;
 };
 
-export const findDefaultGroupByLabel = (
-  labelList: Label[],
-  databaseList: Database[]
-): string | undefined => {
-  const availableKeys = labelList.map((label) => label.key);
-
-  // concat all databases' keys into one array
-  const databaseLabelKeys = databaseList.flatMap((db) =>
-    db.labels
-      .map((label) => label.key)
-      .filter((key) => availableKeys.includes(key))
-  );
-  if (databaseLabelKeys.length > 0) {
-    // counting up the keys' frequency
-    const countsDict = countBy(databaseLabelKeys);
-    const countsList = Object.keys(countsDict).map((key) => ({
-      key,
-      count: countsDict[key],
-    }));
-    // return the most frequent used key
-    countsList.sort((a, b) => b.count - a.count);
-    return countsList[0].key;
-  } else {
-    // just use the first label key
-    return availableKeys[0];
+export const convertKVListToLabels = (
+  list: { key: string; value: string }[],
+  omitEmpty = true // true to omit empty values in the returned kv object
+) => {
+  const labels: Record<string, string> = {};
+  for (const kv of list) {
+    const { key, value } = kv;
+    if (!value && omitEmpty) continue;
+    labels[key] = value;
   }
+  return labels;
 };
 
-export const filterDatabaseListByLabelSelector = (
-  databaseList: Database[],
-  labelSelector: LabelSelector
-): Database[] => {
-  return databaseList.filter((db) =>
-    isDatabaseMatchesSelector(db, labelSelector)
-  );
-};
+export const getLabelValuesFromDatabaseV1List = (
+  key: string,
+  databaseList: ComposedDatabase[]
+): string[] => {
+  if (key === "environment") {
+    const environmentList = useEnvironmentV1Store().getEnvironmentList();
+    return environmentList.map((env) =>
+      extractEnvironmentResourceName(env.name)
+    );
+  }
 
-export const getPipelineFromDeploymentSchedule = (
-  databaseList: Database[],
-  schedule: DeploymentSchedule
-): Database[][] => {
-  const stages: Database[][] = [];
-
-  const collectedIds = new Set<Database["id"]>();
-  schedule.deployments.forEach((deployment) => {
-    const dbs: Database[] = [];
-    databaseList.forEach((db) => {
-      if (collectedIds.has(db.id)) return;
-      if (isDatabaseMatchesSelector(db, deployment.spec.selector)) {
-        dbs.push(db);
-        collectedIds.add(db.id);
-      }
-    });
-    stages.push(dbs);
+  const valueList = databaseList.flatMap((db) => {
+    if (key in db.labels) {
+      return getSemanticLabelValue(db, key);
+    }
+    return [];
   });
 
-  return stages;
+  // Select all distinct database label values of {{key}}
+  return uniq(valueList);
 };
 
-export const isDatabaseMatchesSelector = (
-  database: Database,
-  selector: LabelSelector
-): boolean => {
-  const rules = selector.matchExpressions;
-  return rules.every((rule) => {
-    switch (rule.operator) {
-      case "In":
-        return checkLabelIn(database, rule);
-      case "Exists":
-        return checkLabelExists(database, rule);
-      default:
-        // unknown operators are taken as mismatch
-        console.warn(`known operator "${rule.operator}"`);
-        return false;
-    }
-  });
-};
-
-const checkLabelIn = (
-  db: Database,
-  rule: LabelSelectorRequirement
-): boolean => {
-  const label = db.labels.find((label) => label.key === rule.key);
-  if (!label) return false;
-
-  return rule.values.some((value) => value === label.value);
-};
-
-const checkLabelExists = (
-  db: Database,
-  rule: LabelSelectorRequirement
-): boolean => {
-  return db.labels.some((label) => label.key === rule.key);
-};
-
-export const parseLabelListInTemplate = (
-  template: string,
-  availableLabelList: Label[]
-): Label[] => {
-  const labelList: Label[] = [];
-
-  availableLabelList.forEach((label) => {
-    const placeholder = `{{${hidePrefix(label.key).toUpperCase()}}}`;
-    if (template.includes(placeholder)) {
-      labelList.push(label);
-    }
-  });
-
-  return labelList;
-};
-
-export const buildDatabaseNameByTemplateAndLabelList = (
-  template: string,
-  name: string,
-  labelList: DatabaseLabel[],
-  keepEmpty = false
-): string => {
-  let databaseName = template;
-  if (!!name || !keepEmpty) {
-    databaseName = databaseName.replace("{{DB_NAME}}", name);
+export const getSemanticLabelValue = (db: ComposedDatabase, key: string) => {
+  if (key === "environment") {
+    return extractEnvironmentResourceName(db.effectiveEnvironment);
   }
-  for (let i = 0; i < labelList.length; i++) {
-    const { key, value } = labelList[i];
-    if (!value && keepEmpty) {
-      // keep the placeholder as-is
-      continue;
-    }
-    const placeholder = `{{${hidePrefix(key).toUpperCase()}}}`;
-    databaseName = databaseName.replace(placeholder, value);
-  }
-
-  return databaseName;
+  return db.labels[key] ?? "";
 };

@@ -1,68 +1,64 @@
 <template>
-  <div>
-    <div class="textinfolabel">
-      <i18n-t keypath="repository.setup-wizard-guide">
-        <template #guide>
-          <a
-            href="https://docs.bytebase.com/use-bytebase/vcs-integration/link-repository?ref=console"
-            target="_blank"
-            class="normal-link"
-          >
-            {{ $t("common.detailed-guide") }}</a
-          >
-        </template>
-      </i18n-t>
-    </div>
-    <BBStepTab
-      class="pt-4"
-      :step-item-list="stepList"
+  <div class="w-full h-full overflow-hidden flex flex-col space-y-4">
+    <BBAttention type="info">
+      <div class="textinfolabel">
+        <i18n-t keypath="repository.setup-wizard-guide">
+          <template #guide>
+            <a
+              href="https://bytebase.com/docs/vcs-integration/add-gitops-connector?source=console"
+              target="_blank"
+              class="normal-link"
+            >
+              {{ $t("common.detailed-guide") }}
+            </a>
+          </template>
+        </i18n-t>
+      </div>
+    </BBAttention>
+
+    <StepTab
+      class="pt-4 flex-1 overflow-hidden flex flex-col"
+      pane-class="flex-1 overflow-y-auto"
+      :current-index="state.currentStep"
+      :step-list="stepList"
       :allow-next="allowNext"
-      @try-change-step="tryChangeStep"
-      @try-finish="tryFinishSetup"
+      @update:current-index="tryChangeStep"
+      @finish="tryFinishSetup"
       @cancel="cancel"
     >
       <template #0="{ next }">
-        <RepositoryVCSProviderPanel :config="state.config" @next="next()" />
+        <RepositoryVCSProviderPanel @next="next()" @set-vcs="setVCS" />
       </template>
       <template #1="{ next }">
-        <RepositorySelectionPanel :config="state.config" @next="next()" />
+        <RepositorySelectionPanel
+          :config="state.config"
+          @next="next()"
+          @set-repository="setRepository"
+        />
       </template>
       <template #2>
         <RepositoryConfigPanel :config="state.config" :project="project" />
       </template>
-    </BBStepTab>
+    </StepTab>
   </div>
 </template>
 
-<script lang="ts">
-import { reactive, computed, PropType, defineComponent } from "vue";
-import { useStore } from "vuex";
-import { useRouter } from "vue-router";
+<script lang="ts" setup>
 import isEmpty from "lodash-es/isEmpty";
-import { BBStepTabItem } from "../bbkit/types";
-import RepositoryVCSProviderPanel from "./RepositoryVCSProviderPanel.vue";
-import RepositorySelectionPanel from "./RepositorySelectionPanel.vue";
-import RepositoryConfigPanel from "./RepositoryConfigPanel.vue";
-import {
-  Project,
-  ProjectRepositoryConfig,
-  RepositoryCreate,
-  unknown,
-  VCS,
-} from "../types";
-import { projectSlug } from "../utils";
+import { reactive, computed } from "vue";
 import { useI18n } from "vue-i18n";
-
-// Default file path template is to organize migration files from different environments under separate directories.
-const DEFAULT_FILE_PATH_TEMPLATE =
-  "{{ENV_NAME}}/{{DB_NAME}}__{{VERSION}}__{{TYPE}}__{{DESCRIPTION}}.sql";
-// Default schema path template is co-locate with the corresponding db's migration files and use .(dot) to appear the first.
-const DEFAULT_SCHEMA_PATH_TEMPLATE = "{{ENV_NAME}}/.{{DB_NAME}}__LATEST.sql";
-
-// For tenant mode projects, {{ENV_NAME}} is not supported.
-const DEFAULT_TENANT_MODE_FILE_PATH_TEMPLATE =
-  "{{DB_NAME}}__{{VERSION}}__{{TYPE}}__{{DESCRIPTION}}.sql";
-const DEFAULT_TENANT_MODE_SCHEMA_PATH_TEMPLATE = ".{{DB_NAME}}__LATEST.sql";
+import { BBAttention } from "@/bbkit";
+import { StepTab } from "@/components/v2";
+import { pushNotification, useVCSConnectorStore } from "@/store";
+import type { ComposedProject } from "@/types";
+import { VCSType } from "@/types/proto/v1/common";
+import { VCSProvider } from "@/types/proto/v1/vcs_provider_service";
+import { VCSRepository } from "@/types/proto/v1/vcs_provider_service";
+import { hasProjectPermissionV2 } from "@/utils";
+import type { ProjectRepositoryConfig } from "../types";
+import RepositoryConfigPanel from "./RepositoryConfigPanel.vue";
+import RepositorySelectionPanel from "./RepositorySelectionPanel.vue";
+import RepositoryVCSProviderPanel from "./RepositoryVCSProviderPanel.vue";
 
 const CHOOSE_PROVIDER_STEP = 0;
 // const CHOOSE_REPOSITORY_STEP = 1;
@@ -71,150 +67,134 @@ const CONFIGURE_DEPLOY_STEP = 2;
 interface LocalState {
   config: ProjectRepositoryConfig;
   currentStep: number;
+  showFeatureModal: boolean;
+  processing: boolean;
 }
 
-export default defineComponent({
-  name: "RepositorySetupWizard",
-  components: {
-    RepositoryVCSProviderPanel,
-    RepositorySelectionPanel,
-    RepositoryConfigPanel,
-  },
-  props: {
-    // If false, then we intend to change the existing linked repository intead of just linking a new repository.
-    create: {
-      type: Boolean,
-      default: false,
+const props = defineProps<{
+  project: ComposedProject;
+}>();
+
+const emit = defineEmits<{
+  (event: "cancel"): void;
+  (event: "finish"): void;
+}>();
+
+const { t } = useI18n();
+const vcsConnectorStore = useVCSConnectorStore();
+
+const stepList = [
+  { title: t("repository.choose-git-provider"), hideNext: true },
+  { title: t("repository.select-repository"), hideNext: true },
+  { title: t("repository.configure-deploy") },
+];
+
+const state = reactive<LocalState>({
+  config: {
+    vcs: VCSProvider.fromPartial({}),
+    repositoryInfo: VCSRepository.fromPartial({}),
+    repositoryConfig: {
+      baseDirectory: "/bytebase",
+      branch: "main",
+      resourceId: "",
+      databaseGroup: "",
     },
-    project: {
-      required: true,
-      type: Object as PropType<Project>,
-    },
   },
-  emits: ["cancel", "finish"],
-  setup(props, { emit }) {
-    const { t } = useI18n();
-
-    const router = useRouter();
-    const store = useStore();
-
-    const stepList: BBStepTabItem[] = [
-      { title: t("repository.choose-git-provider"), hideNext: true },
-      { title: t("repository.select-repository"), hideNext: true },
-      { title: t("repository.configure-deploy") },
-    ];
-
-    const isTenantProject = computed(() => {
-      return props.project.tenantMode === "TENANT";
-    });
-
-    const state = reactive<LocalState>({
-      config: {
-        vcs: unknown("VCS") as VCS,
-        code: "",
-        token: {
-          accessToken: "",
-          expiresTs: 0,
-          refreshToken: "",
-        },
-        repositoryInfo: {
-          externalId: "",
-          name: "",
-          fullPath: "",
-          webUrl: "",
-        },
-        repositoryConfig: {
-          baseDirectory: "",
-          branchFilter: "",
-          filePathTemplate: isTenantProject.value
-            ? DEFAULT_TENANT_MODE_FILE_PATH_TEMPLATE
-            : DEFAULT_FILE_PATH_TEMPLATE,
-          schemaPathTemplate: isTenantProject.value
-            ? DEFAULT_TENANT_MODE_SCHEMA_PATH_TEMPLATE
-            : DEFAULT_SCHEMA_PATH_TEMPLATE,
-        },
-      },
-      currentStep: CHOOSE_PROVIDER_STEP,
-    });
-
-    const allowNext = computed((): boolean => {
-      if (state.currentStep == CONFIGURE_DEPLOY_STEP) {
-        return (
-          !isEmpty(state.config.repositoryConfig.branchFilter.trim()) &&
-          !isEmpty(state.config.repositoryConfig.filePathTemplate.trim())
-        );
-      }
-      return true;
-    });
-
-    const tryChangeStep = (
-      oldStep: number,
-      newStep: number,
-      allowChangeCallback: () => void
-    ) => {
-      state.currentStep = newStep;
-      allowChangeCallback();
-    };
-
-    const tryFinishSetup = (allowFinishCallback: () => void) => {
-      const createFunc = () => {
-        const repositoryCreate: RepositoryCreate = {
-          vcsId: state.config.vcs.id,
-          name: state.config.repositoryInfo.name,
-          fullPath: state.config.repositoryInfo.fullPath,
-          webUrl: state.config.repositoryInfo.webUrl,
-          branchFilter: state.config.repositoryConfig.branchFilter,
-          baseDirectory: state.config.repositoryConfig.baseDirectory,
-          filePathTemplate: state.config.repositoryConfig.filePathTemplate,
-          schemaPathTemplate: state.config.repositoryConfig.schemaPathTemplate,
-          externalId: state.config.repositoryInfo.externalId,
-          accessToken: state.config.token.accessToken,
-          expiresTs: state.config.token.expiresTs,
-          refreshToken: state.config.token.refreshToken,
-        };
-        store
-          .dispatch("repository/createRepository", {
-            projectId: props.project.id,
-            repositoryCreate,
-          })
-          .then(() => {
-            allowFinishCallback();
-            emit("finish");
-          });
-      };
-      if (props.create) {
-        createFunc();
-      } else {
-        // It's simple to implement change behavior as delete followed by create.
-        // Though the delete can succeed while the create fails, this is rare, and
-        // even it happens, user can still configure it again.
-        store
-          .dispatch("repository/deleteRepositoryByProjectId", props.project.id)
-          .then(() => {
-            createFunc();
-          });
-      }
-    };
-
-    const cancel = () => {
-      emit("cancel");
-      router.push({
-        name: "workspace.project.detail",
-        params: {
-          projectSlug: projectSlug(props.project),
-        },
-        hash: "#version-control",
-      });
-    };
-
-    return {
-      state,
-      stepList,
-      allowNext,
-      tryChangeStep,
-      tryFinishSetup,
-      cancel,
-    };
-  },
+  currentStep: CHOOSE_PROVIDER_STEP,
+  showFeatureModal: false,
+  processing: false,
 });
+
+const hasPermission = computed(() => {
+  return hasProjectPermissionV2(props.project, "bb.vcsConnectors.create");
+});
+
+const allowNext = computed((): boolean => {
+  if (state.currentStep == CONFIGURE_DEPLOY_STEP) {
+    return (
+      !isEmpty(state.config.repositoryConfig.branch.trim()) &&
+      !isEmpty(state.config.repositoryConfig.resourceId.trim()) &&
+      !state.processing &&
+      hasPermission.value
+    );
+  }
+  return true;
+});
+
+const tryChangeStep = (nextStepIndex: number) => {
+  if (state.processing) {
+    return;
+  }
+  state.currentStep = nextStepIndex;
+};
+
+const validBaseDirectory = computed(() => {
+  let directory = state.config.repositoryConfig.baseDirectory;
+  if (directory.endsWith("/")) {
+    directory = directory.slice(0, directory.length - 1);
+  }
+  return directory || "/";
+});
+
+const tryFinishSetup = async () => {
+  if (state.processing) {
+    return;
+  }
+  state.processing = true;
+
+  const createFunc = async () => {
+    let externalId = state.config.repositoryInfo.id;
+    if (
+      state.config.vcs.type === VCSType.GITHUB ||
+      state.config.vcs.type === VCSType.BITBUCKET
+    ) {
+      externalId = state.config.repositoryInfo.fullPath;
+    }
+
+    await vcsConnectorStore.createConnector(
+      props.project.name,
+      state.config.repositoryConfig.resourceId,
+      {
+        title: state.config.repositoryInfo.title,
+        externalId,
+        vcsProvider: state.config.vcs.name,
+        baseDirectory: validBaseDirectory.value,
+        branch: state.config.repositoryConfig.branch.trim(),
+        databaseGroup: state.config.repositoryConfig.databaseGroup,
+        fullPath: state.config.repositoryInfo.fullPath,
+        webUrl: state.config.repositoryInfo.webUrl,
+      }
+    );
+
+    emit("finish");
+  };
+
+  try {
+    await createFunc();
+  } catch (error: any) {
+    pushNotification({
+      module: "bytebase",
+      style: "CRITICAL",
+      title: `Create connector error occurred`,
+      description: error.details,
+    });
+  } finally {
+    state.processing = false;
+  }
+};
+
+const cancel = () => {
+  if (state.processing) {
+    return;
+  }
+  emit("cancel");
+};
+
+const setVCS = (vcs: VCSProvider) => {
+  state.config.vcs = vcs;
+};
+
+const setRepository = (repository: VCSRepository) => {
+  state.config.repositoryInfo = repository;
+};
 </script>

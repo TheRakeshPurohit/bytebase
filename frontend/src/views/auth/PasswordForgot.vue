@@ -1,11 +1,7 @@
 <template>
   <div class="mx-auto w-full max-w-sm">
     <div>
-      <img
-        class="h-12 w-auto"
-        src="../../assets/logo-full.svg"
-        alt="Bytebase"
-      />
+      <img class="h-12 w-auto" src="@/assets/logo-full.svg" alt="Bytebase" />
       <h2 class="mt-6 text-3xl leading-9 font-extrabold text-main">
         {{ $t("auth.password-forget.title") }}
       </h2>
@@ -13,9 +9,25 @@
 
     <div class="mt-8">
       <div class="mt-6">
-        <label class="block text-base font-medium leading-5 text-control">
-          {{ $t("auth.password-forget.content") }}
-        </label>
+        <BBAttention type="warning" :title="hint">
+          <template v-if="actuatorStore.isSaaSMode && !hint">
+            <i18n-t
+              tag="h3"
+              class="text-sm font-medium text-yellow-800"
+              keypath="auth.password-forget.cloud"
+            >
+              <template #link>
+                <a
+                  href="https://hub.bytebase.com/workspace"
+                  target="_blank"
+                  class="normal-link"
+                >
+                  Bytebase Hub
+                </a>
+              </template>
+            </i18n-t>
+          </template>
+        </BBAttention>
       </div>
     </div>
 
@@ -24,7 +36,10 @@
         <div class="w-full border-t border-control-border"></div>
       </div>
       <div class="relative flex justify-center text-sm">
-        <router-link to="/auth/signin" class="accent-link bg-white px-2">
+        <router-link
+          :to="{ name: AUTH_SIGNIN_MODULE, query: $route.query }"
+          class="accent-link bg-white px-2"
+        >
           {{ $t("auth.password-forget.return-to-sign-in") }}
         </router-link>
       </div>
@@ -32,8 +47,27 @@
   </div>
 </template>
 
-<script lang="ts">
-export default {
-  name: "PasswordForgot",
-};
+<script lang="ts" setup>
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRoute } from "vue-router";
+import { BBAttention } from "@/bbkit";
+import { AUTH_SIGNIN_MODULE } from "@/router/auth";
+import { useActuatorV1Store } from "@/store";
+
+const route = useRoute();
+const { t } = useI18n();
+const actuatorStore = useActuatorV1Store();
+
+const hint = computed(() => {
+  const hint = route.query.hint as string;
+  if (hint) {
+    return hint;
+  }
+  if (!actuatorStore.isSaaSMode) {
+    return t("auth.password-forget.selfhost");
+  }
+
+  return "";
+});
 </script>

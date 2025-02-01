@@ -1,47 +1,37 @@
+import { VueQueryPlugin } from "@tanstack/vue-query";
 import axios from "axios";
-import isEmpty from "lodash-es/isEmpty";
+import "core-js/stable";
+import Long from "long";
+import protobufjs from "protobufjs";
+import "regenerator-runtime/runtime";
 import { createApp } from "vue";
-
 import App from "./App.vue";
-import i18n from "./plugins/i18n";
-import splitpanes from "./plugins/splitpanes";
-import NaiveUI from "./plugins/naive-ui";
-import dayjs from "./plugins/dayjs";
+import "./assets/css/github-markdown-style.css";
 import "./assets/css/inter.css";
 import "./assets/css/tailwind.css";
-
-import dataSourceType from "./directives/data-source-type";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import highlight from "./directives/highlight";
+import dayjs from "./plugins/dayjs";
+import highlight from "./plugins/highlight";
+import i18n from "./plugins/i18n";
+import NaiveUI from "./plugins/naive-ui";
+import { isSilent } from "./plugins/silent-request";
+import "./polyfill";
 import { router } from "./router";
-import { store } from "./store";
+import { pinia, pushNotification } from "./store";
 import {
-  databaseSlug,
-  dataSourceSlug,
-  environmentName,
-  environmentSlug,
   humanizeTs,
-  instanceName,
-  instanceSlug,
-  connectionSlug,
+  humanizeDurationV1,
+  humanizeDate,
   isDev,
   isRelease,
-  projectName,
-  projectSlug,
-  registerStoreWithActivityUtil,
-  registerStoreWithRoleUtil,
-  sizeToFit,
-  urlfy,
 } from "./utils";
 
-registerStoreWithRoleUtil(store);
-registerStoreWithActivityUtil(store);
+protobufjs.util.Long = Long;
+protobufjs.configure();
 
 console.debug("dev:", isDev());
 console.debug("release:", isRelease());
 
-axios.defaults.timeout = 10000;
+axios.defaults.timeout = 30000;
 axios.interceptors.request.use((request) => {
   if (isDev() && request.url!.startsWith("/api")) {
     console.debug(
@@ -68,22 +58,8 @@ axios.interceptors.response.use(
   },
   async (error) => {
     if (error.response) {
-      // When receiving 401 and is returned by our server, it means the current
-      // login user's token becomes invalid. Thus we force a logout.
-      // We could receive 401 when calling external service such as VCS provider,
-      // in such case, we shouldn't logout.
-      if (error.response.status == 401) {
-        const host = store.getters["actuator/info"]().host;
-        if (error.response.request.responseURL.startsWith(host))
-          try {
-            await store.dispatch("auth/logout");
-          } finally {
-            router.push({ name: "auth.signin" });
-          }
-      }
-
-      if (error.response.data.message) {
-        store.dispatch("notification/pushNotification", {
+      if (error.response.data?.message && !isSilent()) {
+        pushNotification({
           module: "bytebase",
           style: "CRITICAL",
           title: error.response.data.message,
@@ -93,8 +69,8 @@ axios.interceptors.response.use(
             : undefined,
         });
       }
-    } else if (error.code == "ECONNABORTED") {
-      store.dispatch("notification/pushNotification", {
+    } else if (error.code == "ECONNABORTED" && !isSilent()) {
+      pushNotification({
         module: "bytebase",
         style: "CRITICAL",
         title: "Connecting server timeout. Make sure the server is running.",
@@ -105,50 +81,19 @@ axios.interceptors.response.use(
   }
 );
 
-// A global hook to collect errors to a central service
-// app.config.errorHandler = function (err, vm, info) {
-// };
+const app = createApp(App);
+// Allow template to access various function
+app.config.globalProperties.window = window;
+app.config.globalProperties.console = console;
+app.config.globalProperties.dayjs = dayjs;
+app.config.globalProperties.humanizeTs = humanizeTs;
+app.config.globalProperties.humanizeDurationV1 = humanizeDurationV1;
+app.config.globalProperties.humanizeDate = humanizeDate;
+app.config.globalProperties.isDev = isDev();
+app.config.globalProperties.isRelease = isRelease();
 
-// We need to restore the basic info in order to perform route authentication.
-// Even using the <suspense>, it's still too late, thus we do the fetch here.
-// We use finally because we always want to mount the app regardless of the error.
-Promise.all([
-  store.dispatch("actuator/fetchInfo"),
-  store.dispatch("subscription/fetchSubscription"),
-  store.dispatch("auth/restoreUser"),
-]).finally(() => {
-  const app = createApp(App);
+app.use(VueQueryPlugin);
+app.use(pinia);
 
-  // Allow template to access various function
-  app.config.globalProperties.window = window;
-  app.config.globalProperties.console = console;
-  app.config.globalProperties.dayjs = dayjs;
-  app.config.globalProperties.humanizeTs = humanizeTs;
-  app.config.globalProperties.isDev = isDev();
-  app.config.globalProperties.isRelease = isRelease();
-  app.config.globalProperties.sizeToFit = sizeToFit;
-  app.config.globalProperties.urlfy = urlfy;
-  app.config.globalProperties.isEmpty = isEmpty;
-  app.config.globalProperties.environmentName = environmentName;
-  app.config.globalProperties.environmentSlug = environmentSlug;
-  app.config.globalProperties.projectName = projectName;
-  app.config.globalProperties.projectSlug = projectSlug;
-  app.config.globalProperties.instanceName = instanceName;
-  app.config.globalProperties.instanceSlug = instanceSlug;
-  app.config.globalProperties.databaseSlug = databaseSlug;
-  app.config.globalProperties.dataSourceSlug = dataSourceSlug;
-  app.config.globalProperties.connectionSlug = connectionSlug;
-
-  app
-    // Need to use a directive on the element.
-    // The normal hljs.initHighlightingOnLoad() won't work because router change would cause vue
-    // to re-render the page and remove the event listener required for
-    .directive("highlight", highlight)
-    .directive("data-source-type", dataSourceType)
-    .use(store)
-    .use(router)
-    .use(i18n)
-    .use(splitpanes)
-    .use(NaiveUI)
-    .mount("#app");
-});
+app.use(router).use(highlight).use(i18n).use(NaiveUI);
+app.mount("#app");

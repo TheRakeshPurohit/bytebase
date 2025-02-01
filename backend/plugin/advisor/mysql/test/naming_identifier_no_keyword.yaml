@@ -1,0 +1,74 @@
+- statement: CREATE TABLE `t`(a int);
+  changeType: 0
+- statement: CREATE TABLE interval(id int);
+  changeType: 0
+  want:
+    - status: 3
+      code: 201
+      title: Syntax error
+      content: "Syntax error at line 1:13 \nrelated text: CREATE TABLE interval"
+      detail: ""
+      startposition:
+        line: 1
+        column: 13
+      endposition: null
+- statement: CREATE TABLE execute(id int)
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "execute" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: CREATE TABLE `execute`(id int)
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "execute" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: CREATE TABLE `interval`(id int);
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "interval" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: "CREATE TABLE t(\n  id int, \n  `current_timestamp` int\n);\n"
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "current_timestamp" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 3
+        column: 0
+      endposition: null
+- statement: CREATE TABLE `test`.`interval`(id int);
+  changeType: 0
+  want:
+    - status: 2
+      code: 308
+      title: naming.identifier.no-keyword
+      content: Identifier "interval" is a keyword and should be avoided
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

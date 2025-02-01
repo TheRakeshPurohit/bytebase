@@ -1,0 +1,80 @@
+- statement: |-
+    CREATE TABLE t (
+      id INT PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      age INT,
+      address VARCHAR
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: Column AGE is nullable, which is not allowed.
+      detail: ""
+      startposition:
+        line: 4
+        column: 0
+      endposition: null
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: Column ADDRESS is nullable, which is not allowed.
+      detail: ""
+      startposition:
+        line: 5
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE t (
+      id INT,
+      name VARCHAR(100) NOT NULL,
+      age INT,
+      address VARCHAR,
+      PRIMARY KEY (id, age)
+    )
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: Column ADDRESS is nullable, which is not allowed.
+      detail: ""
+      startposition:
+        line: 5
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE t (
+      id INT NOT NULL,
+      name VARCHAR(100) NOT NULL,
+      age INT NOT NULL,
+      address VARCHAR NOT NULL
+    );
+  changeType: 0
+- statement: ALTER TABLE a ADD COLUMN age INT;
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: Column AGE is nullable, which is not allowed.
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: ALTER TABLE a ADD COLUMN age INT NOT NULL;
+  changeType: 0
+- statement: ALTER TABLE a ALTER COLUMN age DROP NOT NULL;
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: After dropping NOT NULL of column AGE, it will be nullable, which is not allowed.
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

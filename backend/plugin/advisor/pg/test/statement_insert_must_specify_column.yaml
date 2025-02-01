@@ -1,0 +1,14 @@
+- statement: INSERT INTO tech_book(id, name) VALUES (1, '1')
+  changeType: 0
+- statement: INSERT INTO tech_book VALUES (1, '1')
+  changeType: 0
+  want:
+    - status: 2
+      code: 1107
+      title: statement.insert.must-specify-column
+      content: The INSERT statement must specify columns but "INSERT INTO tech_book VALUES (1, '1')" does not
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

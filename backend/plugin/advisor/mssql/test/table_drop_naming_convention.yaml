@@ -1,0 +1,26 @@
+- statement: DROP TABLE IF EXISTS [Foo_delete];
+  changeType: 0
+- statement: DROP TABLE Foo;
+  changeType: 0
+  want:
+    - status: 2
+      code: 603
+      title: table.drop-naming-convention
+      content: '[foo] mismatches drop table naming convention, naming format should be "_delete$"'
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: DROP TABLE [Foo], [Bar_delete];
+  changeType: 0
+  want:
+    - status: 2
+      code: 603
+      title: table.drop-naming-convention
+      content: '[foo] mismatches drop table naming convention, naming format should be "_delete$"'
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

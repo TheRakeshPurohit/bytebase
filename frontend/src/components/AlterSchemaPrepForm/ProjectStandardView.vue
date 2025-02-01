@@ -1,194 +1,246 @@
 <template>
-  <!-- eslint-disable vue/no-mutating-props -->
-
-  <div v-if="project?.workflowType === 'UI'" class="my-2 textlabel -ml-1">
-    <div class="radio-set-row">
-      <div class="radio">
-        <label class="label">
-          <input
-            v-model="state.alterType"
-            tabindex="-1"
-            type="radio"
-            class="btn"
-            value="SINGLE_DB"
-          />
-          {{ $t("alter-schema.alter-single-db") }}
-        </label>
+  <!-- multiple stage view -->
+  <div class="flex items-center justify-between">
+    <div>
+      <div v-if="databaseList.length === 0" class="textinfolabel">
+        {{ $t("alter-schema.no-databases-in-project") }}
       </div>
-      <div class="radio">
-        <label class="label">
-          <input
-            v-model="state.alterType"
-            tabindex="-1"
-            type="radio"
-            class="btn"
-            value="MULTI_DB"
-          />
-          {{ $t("alter-schema.alter-multiple-db") }}
-        </label>
-      </div>
+    </div>
+    <div>
+      <slot name="header"></slot>
     </div>
   </div>
+  <slot name="sub-header"></slot>
 
-  <template v-if="state.alterType === 'MULTI_DB'">
-    <!-- multiple stage view -->
-    <div class="textinfolabel">
-      {{ $t("alter-schema.alter-multiple-db-info") }}
-    </div>
-    <div class="space-y-4">
-      <div v-for="(environment, envIndex) in environmentList" :key="envIndex">
-        <div class="mb-2 mt-4">{{ environment.name }}</div>
-        <div class="relative bg-white rounded-md -space-y-px">
-          <template
-            v-for="(database, dbIndex) in databaseList.filter(
-              (item) => item.instance.environment.id == environment.id
-            )"
-            :key="dbIndex"
-          >
-            <label
-              class="border-control-border relative border p-3 flex flex-col md:pl-4 md:pr-6 md:grid md:grid-cols-2"
-              :class="
-                database.syncStatus == 'OK'
-                  ? 'cursor-pointer'
-                  : 'cursor-not-allowed'
-              "
-            >
-              <div class="radio text-sm">
-                <input
-                  v-if="database.syncStatus == 'OK'"
-                  type="radio"
-                  class="btn"
-                  :checked="
-                    state.selectedDatabaseIdForEnvironment.get(
-                      environment.id
-                    ) == database.id
-                  "
-                  @change="
-                    selectDatabaseIdForEnvironment(database.id, environment.id)
-                  "
-                />
-                <span
-                  class="font-medium"
-                  :class="
-                    database.syncStatus == 'OK'
-                      ? 'ml-2 text-main'
-                      : 'ml-6 text-control-light'
-                  "
-                  >{{ database.name }}</span
-                >
-              </div>
-              <p
-                class="textinfolabel ml-6 pl-1 text-sm md:ml-0 md:pl-0 md:text-right"
-              >
-                {{ $t("database.last-sync-status") }}:
-                <span
-                  :class="
-                    database.syncStatus == 'OK'
-                      ? 'textlabel'
-                      : 'text-sm font-medium text-error'
-                  "
-                  >{{ database.syncStatus }}</span
-                >
-              </p>
-            </label>
-          </template>
+  <NCollapse
+    arrow-placement="left"
+    :default-expanded-names="
+      databaseListGroupByEnvironment.map((group) => group.environment.name)
+    "
+  >
+    <NCollapseItem
+      v-for="{
+        environment,
+        databaseList: databaseListInEnvironment,
+      } in databaseListGroupByEnvironment"
+      :key="environment.name"
+      :name="environment.name"
+    >
+      <template #header>
+        <label class="flex items-center gap-x-2" @click.stop.prevent>
+          <NCheckbox
+            v-bind="
+              getAllSelectionStateForEnvironment(
+                environment,
+                databaseListInEnvironment
+              )
+            "
+            @update:checked="
+              toggleAllDatabasesSelectionForEnvironment(
+                environment,
+                databaseListInEnvironment,
+                $event
+              )
+            "
+          />
+          <EnvironmentV1Name :environment="environment" :link="false" />
+        </label>
+      </template>
+
+      <template #header-extra>
+        <div class="flex items-center text-xs text-gray-500 mr-2">
+          {{
+            $t(
+              "database.n-selected-m-in-total",
+              getSelectionStateSummaryForEnvironment(
+                environment,
+                databaseListInEnvironment
+              )
+            )
+          }}
+        </div>
+      </template>
+
+      <div class="relative bg-white rounded-md -space-y-px px-2">
+        <template
+          v-for="(database, dbIndex) in databaseListInEnvironment"
+          :key="dbIndex"
+        >
           <label
-            class="border-control-border relative border p-3 flex flex-col cursor-pointer md:pl-4 md:pr-6 md:grid md:grid-cols-3"
+            class="border-control-border relative border p-3 flex flex-col gap-y-2 md:flex-row md:pl-4 md:pr-6"
+            :class="
+              database.syncState === State.ACTIVE
+                ? 'cursor-pointer'
+                : 'cursor-not-allowed'
+            "
           >
-            <div class="radio space-x-2 text-sm">
-              <input
-                type="radio"
-                class="btn"
+            <div class="radio text-sm flex justify-start md:flex-1">
+              <NCheckbox
                 :checked="
-                  state.selectedDatabaseIdForEnvironment.get(environment.id)
-                    ? false
-                    : true
+                  isDatabaseSelectedForEnvironment(
+                    database.name,
+                    environment.name
+                  )
                 "
-                @input="clearDatabaseIdForEnvironment(environment.id)"
+                @update:checked="
+                  (checked) =>
+                    toggleDatabaseNameForEnvironment(
+                      database.name,
+                      environment.name,
+                      checked
+                    )
+                "
               />
-              <span class="ml-3 font-medium text-main uppercase">{{
-                $t("common.skip")
-              }}</span>
+              <span
+                class="font-medium ml-2 text-main"
+                :class="database.syncState !== State.ACTIVE && 'opacity-40'"
+                >{{ database.databaseName }}</span
+              >
+            </div>
+            <div
+              class="flex items-center gap-x-2 ml-6 pl-0 md:ml-0 md:pl-0 md:justify-end"
+            >
+              <InstanceV1Name
+                :instance="database.instanceResource"
+                :link="false"
+              />
+              <span class="textinfolabel">
+                {{ hostPortOfInstanceV1(database.instanceResource) }}
+              </span>
             </div>
           </label>
-        </div>
+        </template>
       </div>
-    </div>
-  </template>
-  <template v-else>
-    <!-- single stage view -->
-    <DatabaseTable
-      mode="PROJECT_SHORT"
-      :bordered="true"
-      :custom-click="true"
-      :database-list="databaseList"
-      @select-database="selectDatabase"
-    />
-  </template>
+    </NCollapseItem>
+  </NCollapse>
 </template>
 
-<script lang="ts">
-import { defineComponent, PropType } from "vue";
-import {
-  Database,
-  DatabaseId,
-  Environment,
-  EnvironmentId,
-  Project,
-} from "../../types";
+<script lang="ts" setup>
+import { NCollapse, NCollapseItem, NCheckbox } from "naive-ui";
+import { reactive, computed, watch } from "vue";
+import { EnvironmentV1Name, InstanceV1Name } from "@/components/v2";
+import type { ComposedDatabase } from "@/types";
+import { State } from "@/types/proto/v1/common";
+import type { Environment } from "@/types/proto/v1/environment_service";
+import type { Project } from "@/types/proto/v1/project_service";
+import { hostPortOfInstanceV1 } from "@/utils";
 
-export type AlterType = "SINGLE_DB" | "MULTI_DB";
+interface LocalState {
+  selectedDatabaseNameListForEnvironment: Map<string, string[]>;
+}
 
-export type State = {
-  alterType: AlterType;
-  selectedDatabaseIdForEnvironment: Map<EnvironmentId, DatabaseId>;
+const props = defineProps<{
+  project?: Project;
+  databaseList: ComposedDatabase[];
+  environmentList: Environment[];
+}>();
+
+const emit = defineEmits<{
+  (event: "select-databases", ...dbList: string[]): void;
+}>();
+
+const state = reactive<LocalState>({
+  selectedDatabaseNameListForEnvironment: new Map<string, string[]>(),
+});
+
+watch(
+  () => state.selectedDatabaseNameListForEnvironment,
+  (selectedDatabaseNameListForEnvironment) => {
+    const flattenDatabaseNameList: string[] = [];
+    for (const databaseNameList of selectedDatabaseNameListForEnvironment.values()) {
+      flattenDatabaseNameList.push(...databaseNameList);
+    }
+    emit("select-databases", ...flattenDatabaseNameList);
+  },
+  { deep: true }
+);
+
+const databaseListGroupByEnvironment = computed(() => {
+  const listByEnv = props.environmentList.map((environment) => {
+    const databaseList = props.databaseList.filter(
+      (db) => db.effectiveEnvironment === environment.name
+    );
+    return {
+      environment,
+      databaseList,
+    };
+  });
+
+  return listByEnv.filter((group) => group.databaseList.length > 0);
+});
+
+const toggleDatabaseNameForEnvironment = (
+  databaseName: string,
+  environmentName: string,
+  selected: boolean
+) => {
+  const map = state.selectedDatabaseNameListForEnvironment;
+  const list = map.get(environmentName) || [];
+  const index = list.indexOf(databaseName);
+  if (selected) {
+    // push the databaseId in if needed
+    if (index < 0) {
+      list.push(databaseName);
+    }
+  } else {
+    // remove the databaseId if exists
+    if (index >= 0) {
+      list.splice(index, 1);
+    }
+  }
+  // Set or remove the list to the map
+  if (list.length > 0) {
+    map.set(environmentName, list);
+  } else {
+    map.delete(environmentName);
+  }
 };
 
-export default defineComponent({
-  name: "ProjectStandardView",
-  props: {
-    state: {
-      type: Object as PropType<State>,
-      required: true,
-    },
-    project: {
-      type: Object as PropType<Project>,
-      default: undefined,
-    },
-    databaseList: {
-      type: Array as PropType<Database[]>,
-      required: true,
-    },
-    environmentList: {
-      type: Array as PropType<Environment[]>,
-      required: true,
-    },
-  },
-  emits: ["select-database"],
-  setup(props, { emit }) {
-    const selectDatabaseIdForEnvironment = (
-      databaseId: DatabaseId,
-      environmentId: EnvironmentId
-    ) => {
-      props.state.selectedDatabaseIdForEnvironment.set(
-        environmentId,
-        databaseId
-      );
-    };
+const isDatabaseSelectedForEnvironment = (
+  databaseName: string,
+  environmentName: string
+) => {
+  const map = state.selectedDatabaseNameListForEnvironment;
+  const list = map.get(environmentName) || [];
+  return list.includes(databaseName);
+};
 
-    const clearDatabaseIdForEnvironment = (environmentId: EnvironmentId) => {
-      props.state.selectedDatabaseIdForEnvironment.delete(environmentId);
-    };
+const getAllSelectionStateForEnvironment = (
+  environment: Environment,
+  databaseList: ComposedDatabase[]
+): { checked: boolean; indeterminate: boolean } => {
+  const set = new Set(
+    state.selectedDatabaseNameListForEnvironment.get(environment.name) ?? []
+  );
+  const checked = set.size > 0 && databaseList.every((db) => set.has(db.name));
+  const indeterminate = !checked && databaseList.some((db) => set.has(db.name));
 
-    const selectDatabase = (db: Database) => {
-      emit("select-database", db);
-    };
+  return {
+    checked,
+    indeterminate,
+  };
+};
 
-    return {
-      selectDatabaseIdForEnvironment,
-      clearDatabaseIdForEnvironment,
-      selectDatabase,
-    };
-  },
-});
+const toggleAllDatabasesSelectionForEnvironment = (
+  environment: Environment,
+  databaseList: ComposedDatabase[],
+  on: boolean
+) => {
+  databaseList.forEach((db) =>
+    toggleDatabaseNameForEnvironment(db.name, environment.name, on)
+  );
+};
+
+const getSelectionStateSummaryForEnvironment = (
+  environment: Environment,
+  databaseList: ComposedDatabase[]
+) => {
+  const set = new Set(
+    state.selectedDatabaseNameListForEnvironment.get(environment.name)
+  );
+  const selected = databaseList.filter((db) => set.has(db.name)).length;
+  const total = databaseList.length;
+
+  return { selected, total };
+};
 </script>

@@ -1,0 +1,69 @@
+- statement: CREATE UNIQUE INDEX uk_tech_book_id_name ON tech_book(id, name)
+  changeType: 0
+- statement: CREATE UNIQUE INDEX tech_book_id_name ON tech_book(id, name)
+  changeType: 0
+  want:
+    - status: 2
+      code: 304
+      title: naming.index.uk
+      content: Unique key in table `tech_book` mismatches the naming convention, expect "^$|^uk_tech_book_id_name$" but found `tech_book_id_name`
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: CREATE UNIQUE INDEX qtzmquwvlnttctfluoouxelxeliltcfzzstrtyocogwwyiyrflmrkbhbfasynlacy ON tech_book(id, name)
+  changeType: 0
+  want:
+    - status: 2
+      code: 304
+      title: naming.index.uk
+      content: Unique key `qtzmquwvlnttctfluoouxelxeliltcfzzstrtyocogwwyiyrflmrkbhbfasynlacy` in table `tech_book` mismatches the naming convention, its length should be within 64 characters
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+    - status: 2
+      code: 304
+      title: naming.index.uk
+      content: Unique key in table `tech_book` mismatches the naming convention, expect "^$|^uk_tech_book_id_name$" but found `qtzmquwvlnttctfluoouxelxeliltcfzzstrtyocogwwyiyrflmrkbhbfasynlacy`
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: ALTER TABLE tech_book ADD UNIQUE uk_tech_book_id_name (id, name)
+  changeType: 0
+- statement: ALTER TABLE tech_book ADD UNIQUE tech_book_id_name (id, name)
+  changeType: 0
+  want:
+    - status: 2
+      code: 304
+      title: naming.index.uk
+      content: Unique key in table `tech_book` mismatches the naming convention, expect "^$|^uk_tech_book_id_name$" but found `tech_book_id_name`
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: ALTER TABLE tech_book RENAME INDEX old_uk TO uk_tech_book_id_name
+  changeType: 0
+- statement: ALTER TABLE tech_book RENAME INDEX old_uk TO uk_tech_book
+  changeType: 0
+  want:
+    - status: 2
+      code: 304
+      title: naming.index.uk
+      content: Unique key in table `tech_book` mismatches the naming convention, expect "^$|^uk_tech_book_id_name$" but found `uk_tech_book`
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: CREATE TABLE book(id INT PRIMARY KEY, name VARCHAR(20), UNIQUE INDEX uk_book_name (name))
+  changeType: 0
+- statement: CREATE TABLE book(id INT PRIMARY KEY, name VARCHAR(20), UNIQUE KEY (name))
+  changeType: 0
+- statement: CREATE TABLE book(id INT PRIMARY KEY, name VARCHAR(20), UNIQUE INDEX (name))
+  changeType: 0

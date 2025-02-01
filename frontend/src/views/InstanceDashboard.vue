@@ -1,200 +1,277 @@
 <template>
-  <div class="flex flex-col">
+  <div class="flex flex-col space-y-4">
     <FeatureAttention
       v-if="remainingInstanceCount <= 3"
-      custom-class="m-5"
       feature="bb.feature.instance-count"
       :description="instanceCountAttention"
     />
-    <div class="px-5 py-2 flex justify-between items-center">
-      <!-- eslint-disable vue/attribute-hyphenation -->
-      <EnvironmentTabFilter
-        :selectedId="state.selectedEnvironment?.id"
-        @select-environment="selectEnvironment"
+    <div class="px-4 flex items-center space-x-2">
+      <AdvancedSearch
+        v-model:params="state.params"
+        :autofocus="false"
+        :placeholder="$t('instance.filter-instance-name')"
+        :scope-options="scopeOptions"
       />
-      <BBTableSearch
-        ref="searchField"
-        :placeholder="$t('instance.search-instance-name')"
-        @change-text="(text) => changeSearchText(text)"
-      />
+      <NButton
+        v-if="hasWorkspacePermissionV2('bb.instances.create')"
+        type="primary"
+        @click="showCreateInstanceDrawer"
+      >
+        <template #icon>
+          <PlusIcon class="h-4 w-4" />
+        </template>
+        {{ $t("quick-action.add-instance") }}
+      </NButton>
     </div>
-    <InstanceTable :instance-list="filteredList(instanceList)" />
+    <InstanceV1Table
+      :bordered="false"
+      :loading="!ready"
+      :instance-list="filteredInstanceV1List"
+      :can-assign-license="subscriptionStore.currentPlan !== PlanType.FREE"
+      :default-expand-data-source="state.dataSourceToggle"
+    />
   </div>
-
-  <BBAlert
-    v-if="state.showGuide"
-    :style="'INFO'"
-    :ok-text="$t('common.do-not-show-again')"
-    :cancel-text="$t('common.dismiss')"
-    :title="$t('instance.how-to-setup-instance')"
-    :description="$t('instance.how-to-setup-instance-description')"
-    @ok="
-      () => {
-        doDismissGuide();
-      }
-    "
-    @cancel="state.showGuide = false"
+  <Drawer
+    :auto-focus="true"
+    :close-on-esc="true"
+    :show="state.showCreateDrawer"
+    @close="state.showCreateDrawer = false"
   >
-  </BBAlert>
+    <InstanceForm :drawer="true" @dismiss="state.showCreateDrawer = false">
+      <DrawerContent :title="$t('quick-action.add-instance')">
+        <InstanceFormBody />
+        <template #footer>
+          <InstanceFormButtons />
+        </template>
+      </DrawerContent>
+    </InstanceForm>
+  </Drawer>
+
+  <FeatureModal
+    :open="state.showFeatureModal"
+    :feature="'bb.feature.instance-count'"
+    @cancel="state.showFeatureModal = false"
+  />
 </template>
 
-<script lang="ts">
-import { computed, watchEffect, onMounted, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
-import EnvironmentTabFilter from "../components/EnvironmentTabFilter.vue";
-import InstanceTable from "../components/InstanceTable.vue";
-import { useStore } from "vuex";
-import { Environment, Subscription, Instance } from "../types";
-import { cloneDeep } from "lodash-es";
-import { sortInstanceList } from "../utils";
+<script lang="tsx" setup>
+import { PlusIcon } from "lucide-vue-next";
+import { NTag, NButton } from "naive-ui";
+import { computed, onMounted, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import AdvancedSearch from "@/components/AdvancedSearch";
+import type {
+  ScopeOption,
+  ValueOption,
+} from "@/components/AdvancedSearch/types";
+import { useCommonSearchScopeOptions } from "@/components/AdvancedSearch/useCommonSearchScopeOptions";
+import { FeatureAttention, FeatureModal } from "@/components/FeatureGuard";
+import {
+  InstanceForm,
+  Form as InstanceFormBody,
+  Buttons as InstanceFormButtons,
+} from "@/components/InstanceForm/";
+import { InstanceV1Table } from "@/components/v2";
+import { Drawer, DrawerContent } from "@/components/v2";
+import {
+  useUIStateStore,
+  useSubscriptionV1Store,
+  useEnvironmentV1List,
+  useInstanceV1List,
+  useInstanceV1Store,
+  useInstanceResourceList,
+} from "@/store";
+import { PlanType } from "@/types/proto/v1/subscription_service";
+import {
+  type SearchParams,
+  hostPortOfDataSource,
+  readableDataSourceType,
+  sortInstanceV1ListByEnvironmentV1,
+  extractEnvironmentResourceName,
+  hasWorkspacePermissionV2,
+} from "@/utils";
 
 interface LocalState {
-  searchText: string;
-  selectedEnvironment?: Environment;
-  showGuide: boolean;
+  params: SearchParams;
+  showCreateDrawer: boolean;
+  showFeatureModal: boolean;
+  dataSourceToggle: string[];
 }
 
-export default {
-  name: "InstanceDashboard",
-  components: {
-    EnvironmentTabFilter,
-    InstanceTable,
+const { t } = useI18n();
+const subscriptionStore = useSubscriptionV1Store();
+const instanceV1Store = useInstanceV1Store();
+const uiStateStore = useUIStateStore();
+const environmentList = useEnvironmentV1List();
+const { instanceList, ready } = useInstanceV1List();
+
+const state = reactive<LocalState>({
+  params: {
+    query: "",
+    scopes: [],
   },
-  setup() {
-    const searchField = ref();
+  showCreateDrawer: false,
+  showFeatureModal: false,
+  dataSourceToggle: [],
+});
 
-    const store = useStore();
-    const router = useRouter();
-    const { t } = useI18n();
+const selectedEnvironment = computed(() => {
+  return (
+    state.params.scopes.find((scope) => scope.id === "environment")?.value ?? ""
+  );
+});
 
-    const environmentList = computed(() => {
-      return store.getters["environment/environmentList"](["NORMAL"]);
-    });
+const selectedAddress = computed(() => {
+  return (
+    state.params.scopes.find((scope) => scope.id === "address")?.value ?? ""
+  );
+});
 
-    const state = reactive<LocalState>({
-      searchText: "",
-      selectedEnvironment: router.currentRoute.value.query.environment
-        ? store.getters["environment/environmentById"](
-            router.currentRoute.value.query.environment
-          )
-        : undefined,
-      showGuide: false,
-    });
-
-    onMounted(() => {
-      // Focus on the internal search field when mounted
-      searchField.value.$el.querySelector("#search").focus();
-
-      if (!store.getters["uistate/introStateByKey"]("guide.instance")) {
-        setTimeout(() => {
-          state.showGuide = true;
-          store.dispatch("uistate/saveIntroStateByKey", {
-            key: "instance.visit",
-            newState: true,
-          });
-        }, 1000);
-      }
-    });
-
-    const prepareInstanceList = () => {
-      store.dispatch("instance/fetchInstanceList");
-    };
-
-    watchEffect(prepareInstanceList);
-
-    const selectEnvironment = (environment: Environment) => {
-      state.selectedEnvironment = environment;
-      if (environment) {
-        router.replace({
-          name: "workspace.instance",
-          query: { environment: environment.id },
-        });
-      } else {
-        router.replace({ name: "workspace.instance" });
-      }
-    };
-
-    const changeSearchText = (searchText: string) => {
-      state.searchText = searchText;
-    };
-
-    const doDismissGuide = () => {
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "guide.instance",
-        newState: true,
-      });
-      state.showGuide = false;
-    };
-
-    const instanceList = computed(() => {
-      const list = store.getters["instance/instanceList"]();
-      return sortInstanceList(cloneDeep(list), environmentList.value);
-    });
-
-    const filteredList = (list: Instance[]) => {
-      if (!state.selectedEnvironment && !state.searchText) {
-        // Select "All"
-        return list;
-      }
-      return list.filter((instance) => {
-        return (
-          (!state.selectedEnvironment ||
-            instance.environment.id == state.selectedEnvironment.id) &&
-          (!state.searchText ||
-            instance.name
-              .toLowerCase()
-              .includes(state.searchText.toLowerCase()))
-        );
-      });
-    };
-
-    const instanceQuota = computed((): number => {
-      const subscription: Subscription | undefined =
-        store.getters["subscription/subscription"]();
-      return subscription?.instanceCount ?? 5;
-    });
-
-    const remainingInstanceCount = computed((): number => {
-      const instanceList: Instance[] = store.getters["instance/instanceList"]([
-        "NORMAL",
-      ]);
-      return Math.max(0, instanceQuota.value - instanceList.length);
-    });
-
-    const instanceCountAttention = computed((): string => {
-      const upgrade = t(
-        "subscription.features.bb-feature-instance-count.upgrade"
-      );
-      let status = "";
-      if (remainingInstanceCount.value > 0) {
-        status = t(
-          "subscription.features.bb-feature-instance-count.remaining",
-          {
-            total: instanceQuota.value,
-            count: remainingInstanceCount.value,
-          }
-        );
-      } else {
-        status = t("subscription.features.bb-feature-instance-count.runoutof", {
-          total: instanceQuota.value,
-        });
-      }
-
-      return `${status} ${upgrade}`;
-    });
-
-    return {
-      searchField,
-      state,
-      instanceList,
-      filteredList,
-      selectEnvironment,
-      changeSearchText,
-      doDismissGuide,
-      remainingInstanceCount,
-      instanceCountAttention,
-    };
-  },
+const showCreateInstanceDrawer = () => {
+  const instanceList = useInstanceResourceList();
+  if (subscriptionStore.instanceCountLimit <= instanceList.value.length) {
+    state.showFeatureModal = true;
+    return;
+  }
+  state.showCreateDrawer = true;
 };
+
+watch(
+  () => selectedAddress.value,
+  (selectedAddress) => {
+    if (!selectedAddress) {
+      state.dataSourceToggle = [];
+    }
+  }
+);
+
+const addressOptions = computed(() => {
+  const addressMap: Map<
+    string,
+    {
+      keywords: string[];
+      types: Set<string>;
+    }
+  > = new Map();
+
+  for (const instance of instanceList.value) {
+    for (const ds of instance.dataSources) {
+      const host = hostPortOfDataSource(ds);
+      if (!host) {
+        continue;
+      }
+      if (!addressMap.has(host)) {
+        addressMap.set(host, {
+          keywords: [ds.host, ds.port],
+          types: new Set(),
+        });
+      }
+      addressMap.get(host)?.types?.add(readableDataSourceType(ds.type));
+    }
+  }
+
+  const options: ValueOption[] = [];
+  for (const [host, item] of addressMap.entries()) {
+    options.push({
+      value: host,
+      keywords: [...item.keywords, ...item.types],
+      render: () => {
+        return (
+          <div class={"flex items-center gap-x-2"}>
+            {host}
+            <div class={"flex items-center gap-x-1"}>
+              {[...item.types].map((type) => (
+                <NTag size="small" round>
+                  {type}
+                </NTag>
+              ))}
+            </div>
+          </div>
+        );
+      },
+    });
+  }
+
+  return options;
+});
+
+const scopeOptions = computed((): ScopeOption[] => {
+  return [
+    ...useCommonSearchScopeOptions(
+      computed(() => state.params),
+      ["environment"]
+    ).value,
+    {
+      id: "address",
+      title: t("instance.advanced-search.scope.address.title"),
+      description: t("instance.advanced-search.scope.address.description"),
+      options: addressOptions.value,
+    },
+  ];
+});
+
+onMounted(() => {
+  if (!uiStateStore.getIntroStateByKey("instance.visit")) {
+    uiStateStore.saveIntroStateByKey({
+      key: "instance.visit",
+      newState: true,
+    });
+  }
+});
+
+const filteredInstanceV1List = computed(() => {
+  const keyword = state.params.query.trim().toLowerCase();
+  const list = instanceList.value.filter((instance) => {
+    if (keyword) {
+      if (!instance.title.toLowerCase().includes(keyword)) {
+        return false;
+      }
+    }
+    if (selectedEnvironment.value) {
+      if (
+        extractEnvironmentResourceName(instance.environment) !==
+        selectedEnvironment.value
+      ) {
+        return false;
+      }
+    }
+    if (selectedAddress.value) {
+      const matched = instance.dataSources.some(
+        (ds) => hostPortOfDataSource(ds) === selectedAddress.value
+      );
+      if (matched) {
+        state.dataSourceToggle.push(instance.name);
+      }
+      return matched;
+    }
+    return true;
+  });
+
+  return sortInstanceV1ListByEnvironmentV1(list, environmentList.value);
+});
+
+const remainingInstanceCount = computed((): number => {
+  return Math.max(
+    0,
+    subscriptionStore.instanceCountLimit - instanceV1Store.instanceList.length
+  );
+});
+
+const instanceCountAttention = computed((): string => {
+  const upgrade = t("dynamic.subscription.features.bb-feature-instance-count.upgrade");
+  let status = "";
+
+  if (remainingInstanceCount.value > 0) {
+    status = t("dynamic.subscription.features.bb-feature-instance-count.remaining", {
+      total: subscriptionStore.instanceCountLimit,
+      count: remainingInstanceCount.value,
+    });
+  } else {
+    status = t("dynamic.subscription.features.bb-feature-instance-count.runoutof", {
+      total: subscriptionStore.instanceCountLimit,
+    });
+  }
+
+  return `${status} ${upgrade}`;
+});
 </script>

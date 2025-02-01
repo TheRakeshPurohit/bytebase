@@ -1,13 +1,22 @@
 <template>
-  <BBAttention :style="'WARN'" :description="attentionText" />
+  <BBAttention type="warning">
+    {{ attentionText }}
+  </BBAttention>
   <div class="mt-4 space-y-2">
     <div class="flex justify-between items-center">
-      <button class="btn-icon" @click.prevent="prepareRepositoryList">
-        <heroicons-outline:refresh class="w-6 h-6" />
-      </button>
-      <BBTableSearch
+      <BBSpin v-if="state.loading" :size="20" />
+      <NButton
+        v-else
+        quaternary
+        circle
+        :loading="state.loading"
+        @click.prevent="refreshRepositoryList"
+      >
+        <RefreshCwIcon class="w-5 h-5" />
+      </NButton>
+      <SearchBox
+        v-model:value="state.searchText"
         :placeholder="$t('repository.select-repository-search')"
-        @change-text="(text) => changeSearchText(text)"
       />
     </div>
     <div
@@ -20,14 +29,11 @@
           class="block hover:bg-control-bg-hover cursor-pointer"
           @click.prevent="selectRepository(repository)"
         >
-          <div class="flex items-center px-4 py-3">
+          <div class="flex items-center px-3 py-2">
             <div class="min-w-0 flex-1 flex items-center">
               {{ repository.fullPath }}
             </div>
-            <div>
-              <!-- Heroicon name: solid/chevron-right -->
-              <heroicons-solid:chevron-right class="h-5 w-5 text-control" />
-            </div>
+            <ChevronRightIcon class="h-5 w-5 text-control" />
           </div>
         </li>
       </ul>
@@ -35,82 +41,87 @@
   </div>
 </template>
 
-<script lang="ts">
-import { useStore } from "vuex";
-import { reactive, computed, PropType, watchEffect } from "vue";
-import { ExternalRepositoryInfo, ProjectRepositoryConfig } from "../types";
+<script setup lang="ts">
+import { RefreshCwIcon, ChevronRightIcon } from "lucide-vue-next";
+import { NButton } from "naive-ui";
+import { reactive, computed, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
+import { BBAttention } from "@/bbkit";
+import BBSpin from "@/bbkit/BBSpin.vue";
+import { pushNotification, useVCSProviderStore } from "@/store";
+import type { ProjectRepositoryConfig } from "@/types";
+import { VCSType } from "@/types/proto/v1/common";
+import type { VCSRepository } from "@/types/proto/v1/vcs_provider_service";
+import { hasWorkspacePermissionV2 } from "@/utils";
+import { SearchBox } from "./v2";
 
 interface LocalState {
-  repositoryList: ExternalRepositoryInfo[];
+  repositoryList: VCSRepository[];
   searchText: string;
+  loading: boolean;
 }
 
-export default {
-  name: "RepositorySelectionPanel",
-  props: {
-    config: {
-      required: true,
-      type: Object as PropType<ProjectRepositoryConfig>,
-    },
-  },
-  emits: ["next"],
-  setup(props, { emit }) {
-    const store = useStore();
-    const state = reactive<LocalState>({
-      repositoryList: [],
-      searchText: "",
+const props = defineProps<{ config: ProjectRepositoryConfig }>();
+
+const emit = defineEmits<{
+  (event: "next"): void;
+  (event: "set-repository", payload: VCSRepository): void;
+}>();
+
+const { t } = useI18n();
+const vcsV1Store = useVCSProviderStore();
+const state = reactive<LocalState>({
+  repositoryList: [],
+  searchText: "",
+  loading: true,
+});
+
+onMounted(() => {
+  refreshRepositoryList();
+});
+
+const refreshRepositoryList = async () => {
+  if (!hasWorkspacePermissionV2("bb.vcsProviders.searchProjects")) {
+    pushNotification({
+      module: "bytebase",
+      style: "CRITICAL",
+      title: "Permission denied for searching projects",
     });
+    return;
+  }
 
-    const prepareRepositoryList = () => {
-      if (props.config.vcs.type == "GITLAB_SELF_HOST") {
-        store
-          .dispatch("gitlab/fetchProjectList", {
-            vcs: props.config.vcs,
-            token: props.config.token.accessToken,
-          })
-          .then((list) => {
-            state.repositoryList = list;
-          });
-      }
-    };
+  state.loading = true;
+  const projects = await vcsV1Store.searchVCSProviderRepositories(
+    props.config.vcs.name
+  );
+  state.repositoryList = projects;
+  state.loading = false;
+};
 
-    watchEffect(prepareRepositoryList);
+const repositoryList = computed(() => {
+  if (state.searchText == "") {
+    return state.repositoryList;
+  }
+  return state.repositoryList.filter((repository: VCSRepository) => {
+    return repository.fullPath.toLowerCase().includes(state.searchText);
+  });
+});
 
-    const repositoryList = computed(() => {
-      if (state.searchText == "") {
-        return state.repositoryList;
-      }
-      return state.repositoryList.filter(
-        (repository: ExternalRepositoryInfo) => {
-          return repository.fullPath.toLowerCase().includes(state.searchText);
-        }
-      );
-    });
+const attentionText = computed((): string => {
+  if (props.config.vcs.type === VCSType.GITLAB) {
+    return t("repository.select-repository-attention-gitlab");
+  } else if (props.config.vcs.type === VCSType.GITHUB) {
+    return t("repository.select-repository-attention-github");
+  } else if (props.config.vcs.type === VCSType.BITBUCKET) {
+    return t("repository.select-repository-attention-bitbucket");
+  } else if (props.config.vcs.type === VCSType.AZURE_DEVOPS) {
+    return t("repository.select-repository-attention-azure-devops");
+  }
+  return "";
+});
 
-    const attentionText = computed((): string => {
-      if (props.config.vcs.type == "GITLAB_SELF_HOST") {
-        return "repository.select-repository-attention-gitlab";
-      }
-      return "";
-    });
-
-    const selectRepository = (repository: ExternalRepositoryInfo) => {
-      props.config.repositoryInfo = repository;
-      emit("next");
-    };
-
-    const changeSearchText = (searchText: string) => {
-      state.searchText = searchText;
-    };
-
-    return {
-      state,
-      selectRepository,
-      repositoryList,
-      attentionText,
-      changeSearchText,
-      prepareRepositoryList,
-    };
-  },
+const selectRepository = (repository: VCSRepository) => {
+  emit("set-repository", repository);
+  emit("next");
 };
 </script>

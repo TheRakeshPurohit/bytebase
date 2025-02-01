@@ -1,179 +1,165 @@
 <template>
-  <div class="flex flex-col">
-    <div class="px-4 py-2 flex justify-between items-center">
-      <BBTabFilter
-        :tab-item-list="tabItemList"
-        :selected-index="state.selectedIndex"
-        @select-index="
-          (index) => {
-            state.selectedIndex = index;
-          }
-        "
-      />
-      <BBTableSearch
-        ref="searchField"
-        class="w-56"
-        :placeholder="
-          state.selectedIndex == PROJECT_TAB
-            ? $t('archive.project-search-bar-placeholder')
-            : state.selectedIndex == INSTANCE_TAB
-            ? $t('archive.instance-search-bar-placeholder')
-            : $t('archive.environment-search-bar-placeholder')
-        "
-        @change-text="(text) => changeSearchText(text)"
+  <div class="flex flex-col space-y-4">
+    <div class="flex justify-between items-end">
+      <TabFilter v-model:value="state.selectedTab" :items="tabItemList" />
+
+      <SearchBox
+        v-model:value="state.searchText"
+        :placeholder="$t('common.filter-by-name')"
       />
     </div>
-    <ProjectTable
-      v-if="state.selectedIndex == PROJECT_TAB"
-      :project-list="filteredProjectList(projectList)"
-    />
-    <InstanceTable
-      v-else-if="state.selectedIndex == INSTANCE_TAB"
-      :instance-list="filteredInstanceList(instanceList)"
-    />
-    <EnvironmentTable
-      v-else-if="state.selectedIndex == ENVIRONMENT_TAB"
-      :environment-list="filteredEnvironmentList(environmentList)"
-    />
+    <div class="">
+      <ProjectV1Table
+        v-if="state.selectedTab == 'PROJECT'"
+        key="archived-project-table"
+        :project-list="filteredProjectList"
+      />
+      <InstanceV1Table
+        v-else-if="state.selectedTab == 'INSTANCE'"
+        key="archived-instance-table"
+        :instance-list="filteredInstanceList"
+        :show-selection="false"
+        :can-assign-license="false"
+        :show-operation="false"
+      />
+      <EnvironmentV1Table
+        v-else-if="state.selectedTab == 'ENVIRONMENT'"
+        key="archived-environment-table"
+        class="border-x"
+        :environment-list="filteredEnvironmentList"
+      />
+      <IdentityProviderTable
+        v-else-if="state.selectedTab == 'SSO'"
+        key="archived-sso-table"
+        class="border-x"
+        :identity-provider-list="filteredSSOList(deletedSSOList)"
+      />
+    </div>
   </div>
 </template>
 
-<script lang="ts">
-import { computed, ComputedRef, reactive, watchEffect } from "vue";
-import { useStore } from "vuex";
-import EnvironmentTable from "../components/EnvironmentTable.vue";
-import InstanceTable from "../components/InstanceTable.vue";
-import ProjectTable from "../components/ProjectTable.vue";
-import {
-  Environment,
-  Instance,
-  Principal,
-  Project,
-  UNKNOWN_ID,
-} from "../types";
-import { isDBAOrOwner } from "../utils";
-import { BBTabFilterItem } from "../bbkit/types";
+<script lang="ts" setup>
+import { computed, reactive, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
-
-const PROJECT_TAB = 0;
-const INSTANCE_TAB = 1;
-const ENVIRONMENT_TAB = 2;
+import IdentityProviderTable from "@/components/SSO/IdentityProviderTable.vue";
+import {
+  EnvironmentV1Table,
+  InstanceV1Table,
+  ProjectV1Table,
+  SearchBox,
+  TabFilter,
+} from "@/components/v2";
+import {
+  useEnvironmentV1Store,
+  useIdentityProviderStore,
+  useInstanceV1List,
+  useProjectV1List,
+} from "@/store";
+import { State } from "@/types/proto/v1/common";
+import type { IdentityProvider } from "@/types/proto/v1/idp_service";
+import {
+  filterProjectV1ListByKeyword,
+  hasWorkspacePermissionV2,
+} from "@/utils";
 
 interface LocalState {
-  selectedIndex: number;
+  selectedTab: "PROJECT" | "INSTANCE" | "ENVIRONMENT" | "SSO";
   searchText: string;
 }
 
-export default {
-  name: "Archive",
-  components: { EnvironmentTable, InstanceTable, ProjectTable },
-  setup() {
-    const { t } = useI18n();
+const { t } = useI18n();
+const environmentStore = useEnvironmentV1Store();
+const identityProviderStore = useIdentityProviderStore();
+const state = reactive<LocalState>({
+  selectedTab: "PROJECT",
+  searchText: "",
+});
 
-    const state = reactive<LocalState>({
-      selectedIndex: PROJECT_TAB,
-      searchText: "",
-    });
+const prepareList = () => {
+  environmentStore.fetchEnvironments(true /* showDeleted */);
+  identityProviderStore.fetchIdentityProviderList(true /* showDeleted */);
+};
 
-    const currentUser: ComputedRef<Principal> = computed(() =>
-      store.getters["auth/currentUser"]()
-    );
+watchEffect(prepareList);
 
-    const store = useStore();
+const environmentList = computed(() => {
+  return environmentStore.environmentList.filter(
+    (env) => env.state === State.DELETED
+  );
+});
 
-    const prepareList = () => {
-      // It will also be called when user logout
-      if (currentUser.value.id != UNKNOWN_ID) {
-        store.dispatch("project/fetchProjectListByUser", {
-          userId: currentUser.value.id,
-          rowStatusList: ["ARCHIVED"],
-        });
-      }
+const instanceList = computed(() => {
+  return useInstanceV1List(true /** showDeleted */).instanceList.value.filter(
+    (instance) => instance.state === State.DELETED
+  );
+});
 
-      if (isDBAOrOwner(currentUser.value.role)) {
-        store.dispatch("instance/fetchInstanceList", ["ARCHIVED"]);
+const projectList = computed(() => {
+  return useProjectV1List(true /** showDeleted */).projectList.value.filter(
+    (project) => project.state === State.DELETED
+  );
+});
 
-        store.dispatch("environment/fetchEnvironmentList", ["ARCHIVED"]);
-      }
-    };
+const deletedSSOList = computed(() => {
+  return useIdentityProviderStore().deletedIdentityProviderList;
+});
 
-    watchEffect(prepareList);
+const tabItemList = computed(() => {
+  const list = [{ value: "PROJECT", label: t("common.project") }];
 
-    const projectList = computed((): Project[] => {
-      return store.getters["project/projectListByUser"](currentUser.value.id, [
-        "ARCHIVED",
-      ]);
-    });
+  if (hasWorkspacePermissionV2("bb.instances.undelete")) {
+    list.push({ value: "INSTANCE", label: t("common.instance") });
+  }
 
-    const instanceList = computed((): Instance[] => {
-      return store.getters["instance/instanceList"](["ARCHIVED"]);
-    });
+  if (hasWorkspacePermissionV2("bb.environments.undelete")) {
+    list.push({ value: "ENVIRONMENT", label: t("common.environment") });
+  }
 
-    const environmentList = computed(() => {
-      return store.getters["environment/environmentList"](["ARCHIVED"]);
-    });
+  if (hasWorkspacePermissionV2("bb.identityProviders.undelete")) {
+    list.push({ value: "SSO", label: t("settings.sidebar.sso") });
+  }
 
-    const tabItemList = computed((): BBTabFilterItem[] => {
-      return isDBAOrOwner(currentUser.value.role)
-        ? [
-            { title: t("common.project"), alert: false },
-            { title: t("common.instance"), alert: false },
-            { title: t("common.environment"), alert: false },
-          ]
-        : [{ title: t("common.instance"), alert: false }];
-    });
+  return list;
+});
 
-    const filteredProjectList = (list: Project[]) => {
-      if (!state.searchText) {
-        return list;
-      }
-      return list.filter((project) => {
-        return project.name
-          .toLowerCase()
-          .includes(state.searchText.toLowerCase());
-      });
-    };
+const filteredProjectList = computed(() => {
+  const list = projectList.value.filter(
+    (project) => project.state === State.DELETED
+  );
+  return filterProjectV1ListByKeyword(list, state.searchText);
+});
 
-    const filteredInstanceList = (list: Instance[]) => {
-      if (!state.searchText) {
-        return list;
-      }
-      return list.filter((instance) => {
-        return instance.name
-          .toLowerCase()
-          .includes(state.searchText.toLowerCase());
-      });
-    };
+const filteredInstanceList = computed(() => {
+  const keyword = state.searchText.trim();
+  if (!keyword) {
+    return instanceList.value;
+  }
+  return instanceList.value.filter((instance) => {
+    return instance.title
+      .toLowerCase()
+      .includes(state.searchText.toLowerCase());
+  });
+});
 
-    const filteredEnvironmentList = (list: Environment[]) => {
-      if (!state.searchText) {
-        return list;
-      }
-      return list.filter((environment) => {
-        return environment.name
-          .toLowerCase()
-          .includes(state.searchText.toLowerCase());
-      });
-    };
+const filteredEnvironmentList = computed(() => {
+  const list = environmentList.value;
+  const keyword = state.searchText.trim().toLowerCase();
+  if (!keyword) {
+    return list;
+  }
+  return list.filter((environment) => {
+    environment.title.toLowerCase().includes(keyword);
+  });
+});
 
-    const changeSearchText = (searchText: string) => {
-      state.searchText = searchText;
-    };
-
-    return {
-      PROJECT_TAB,
-      INSTANCE_TAB,
-      ENVIRONMENT_TAB,
-      state,
-      projectList,
-      instanceList,
-      environmentList,
-      tabItemList,
-      filteredProjectList,
-      filteredInstanceList,
-      filteredEnvironmentList,
-      changeSearchText,
-    };
-  },
+const filteredSSOList = (list: IdentityProvider[]) => {
+  if (!state.searchText) {
+    return list;
+  }
+  return list.filter((identityProvider) => {
+    return identityProvider.name
+      .toLowerCase()
+      .includes(state.searchText.toLowerCase());
+  });
 };
 </script>

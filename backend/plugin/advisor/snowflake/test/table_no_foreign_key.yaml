@@ -1,0 +1,109 @@
+- statement: |-
+    CREATE TABLE CUSTOMER
+    (
+        ID            INT REFERENCES PERSON(ID),
+        FULL_NAME     VARCHAR(10),
+        POSITION      VARCHAR(100)
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 602
+      title: table.no-foreign-key
+      content: FOREIGN KEY is not allowed in the table CUSTOMER.
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE CUSTOMER
+    (
+        ID            INT,
+        FULL_NAME     VARCHAR(10),
+        POSITION      VARCHAR(100),
+        (ID) REFERENCES PERSON(ID)
+    );
+  changeType: 0
+  want:
+    - status: 2
+      code: 602
+      title: table.no-foreign-key
+      content: FOREIGN KEY is not allowed in the table CUSTOMER.
+      detail: ""
+      startposition:
+        line: 6
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE CUSTOMER
+    (
+        ID            INT,
+        FULL_NAME     VARCHAR(10),
+        POSITION      VARCHAR(100)
+    );
+    ALTER TABLE CUSTOMER ADD (ID) REFERENCES PERSON(ID);
+  changeType: 0
+  want:
+    - status: 2
+      code: 602
+      title: table.no-foreign-key
+      content: FOREIGN KEY is not allowed in the table CUSTOMER.
+      detail: ""
+      startposition:
+        line: 7
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE "ANOTHER_SCHEMA"."CUSTOMER"
+    (
+        ID            INT REFERENCES PERSON(ID),
+        FULL_NAME     VARCHAR(10),
+        POSITION      VARCHAR(100)
+    );
+    ALTER TABLE CUSTOMER DROP FOREIGN KEY (ID);
+  changeType: 0
+  want:
+    - status: 2
+      code: 602
+      title: table.no-foreign-key
+      content: FOREIGN KEY is not allowed in the table "ANOTHER_SCHEMA"."CUSTOMER".
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE CUSTOMER
+    (
+        ID            INT REFERENCES PERSON(ID),
+        FULL_NAME     VARCHAR(10),
+        POSITION      VARCHAR(100)
+    );
+    ALTER TABLE CUSTOMER DROP FOREIGN KEY (ID);
+  changeType: 0
+- statement: |-
+    CREATE TABLE CUSTOMER
+    (
+        ID            INT,
+        FULL_NAME     VARCHAR(10),
+        POSITION      VARCHAR(100)
+    );
+    CREATE TABLE PERSON
+    (
+        ID            INT,
+        FULL_NAME     VARCHAR(10),
+        POSITION      VARCHAR(100)
+    );
+    ALTER TABLE CUSTOMER ADD CONSTRAINT FK_CUSTOMER_PERSON FOREIGN KEY (ID) REFERENCES PERSON(ID);
+  changeType: 0
+  want:
+    - status: 2
+      code: 602
+      title: table.no-foreign-key
+      content: FOREIGN KEY is not allowed in the table CUSTOMER.
+      detail: ""
+      startposition:
+        line: 13
+        column: 0
+      endposition: null

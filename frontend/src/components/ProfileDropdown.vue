@@ -1,279 +1,370 @@
 <template>
-  <div class="relative">
-    <button
-      id="user-menu"
-      type="button"
-      class="flex text-sm text-white focus:outline-none focus:shadow-solid"
-      aria-label="User menu"
-      aria-haspopup="true"
-      @click.prevent="$refs.menu.toggle($event)"
-      @contextmenu.capture.prevent="$refs.menu.toggle($event)"
-    >
-      <PrincipalAvatar :principal="currentUser" />
-    </button>
-    <BBContextMenu ref="menu" class="origin-top-left mt-2 w-48">
-      <router-link
-        class="px-4 py-3 menu-item"
-        :to="`/u/${currentUser.id}`"
-        role="menuitem"
-      >
-        <p class="text-sm text-main font-medium">
-          {{ currentUser.name }}
-        </p>
-        <p class="text-sm text-control truncate">
-          {{ currentUser.email }}
-        </p>
-      </router-link>
-      <div class="border-t border-gray-100"></div>
-      <div v-if="!isRelease" class="md:hidden py-1">
-        <div v-if="currentUser.role != 'OWNER'" class="py-1">
-          <a class="menu-item" role="menuitem" @click.prevent="switchToOwner">
-            {{ $t("common.role-switch.owner") }}
-          </a>
-        </div>
-        <div v-if="currentUser.role != 'DBA'" class="py-1">
-          <a class="menu-item" role="menuitem" @click.prevent="switchToDBA">
-            {{ $t("common.role-switch.dba") }}
-          </a>
-        </div>
-        <div v-if="currentUser.email != 'DEVELOPER'" class="py-1">
-          <a
-            class="menu-item"
-            role="menuitem"
-            @click.prevent="switchToDeveloper"
-          >
-            {{ $t("common.role-switch.developer") }}
-          </a>
-        </div>
-      </div>
-      <div
-        v-if="!isRelease"
-        class="py-1 menu-item"
-        role="menuitem"
-        @click.prevent="ping"
-      >
-        Ping
-      </div>
-      <div class="border-t border-gray-100"></div>
-      <div class="py-1">
-        <router-link to="/setting" class="menu-item" role="menuitem">{{
-          $t("common.settings")
-        }}</router-link>
-        <div
-          class="menu-item relative"
-          @mouseenter="$refs.languageMenu.toggle($event)"
-          @mouseleave="$refs.languageMenu.toggle($event)"
-          @click.capture.prevent="$refs.languageMenu.toggle($event)"
-        >
-          <span>{{ $t("common.language") }}</span>
-          <BBContextMenu
-            ref="languageMenu"
-            class="origin-left absolute left-0 top-0 -translate-x-48 transform"
-          >
-            <div
-              class="menu-item px-3 py-1 hover:bg-gray-100"
-              :class="{ 'bg-gray-100': locale === 'en' }"
-              @click.prevent="toggleLocale('en')"
-            >
-              <div class="radio text-sm">
-                <input type="radio" class="btn" :checked="locale === 'en'" />
-                <label class="ml-2">English</label>
-              </div>
-            </div>
-            <div
-              class="menu-item px-3 py-1 hover:bg-gray-100"
-              :class="{ 'bg-gray-100': locale === 'zh-CN' }"
-              @click.prevent="toggleLocale('zh-CN')"
-            >
-              <div class="radio text-sm">
-                <input type="radio" class="btn" :checked="locale === 'zh-CN'" />
-                <label class="ml-2">简体中文</label>
-              </div>
-            </div>
-          </BBContextMenu>
-        </div>
-        <a
-          v-if="showQuickstart"
-          class="menu-item"
-          role="menuitem"
-          @click.prevent="resetQuickstart"
-          >{{ $t("common.quickstart") }}</a
-        >
-        <a href="https://docs.bytebase.com" target="_blank" class="menu-item">
-          {{ $t("common.help") }}
-        </a>
-      </div>
-      <div class="border-t border-gray-100"></div>
-      <div v-if="!isRelease" class="py-1 menu-item">
-        <div class="flex flex-row items-center space-x-2 justify-between">
-          <span> Debug </span>
-          <BBSwitch :value="isDebug" @toggle="switchDebug" />
-        </div>
-      </div>
-      <div class="border-t border-gray-100"></div>
-      <div class="py-1">
-        <a class="menu-item" role="menuitem" @click.prevent="logout">{{
-          $t("common.logout")
-        }}</a>
-      </div>
-    </BBContextMenu>
-  </div>
+  <NDropdown
+    :show="showDropdown"
+    :options="options"
+    @clickoutside="showDropdown = false"
+  >
+    <UserAvatar
+      class="cursor-pointer"
+      :size="'SMALL'"
+      :user="currentUserV1"
+      @click="showDropdown = true"
+    />
+  </NDropdown>
 </template>
 
-<script lang="ts">
-import { computed, ref } from "vue";
-import { useStore } from "vuex";
-import { useRouter } from "vue-router";
-import PrincipalAvatar from "./PrincipalAvatar.vue";
-import { ServerInfo } from "../types";
-import { useLanguage } from "../composables/useLanguage";
+<script lang="ts" setup>
+import type { DropdownOption } from "naive-ui";
+import { NSwitch, NDropdown } from "naive-ui";
+import { storeToRefs } from "pinia";
+import { computed, ref, h } from "vue";
+import { useI18n } from "vue-i18n";
+import { useLanguage } from "@/composables/useLanguage";
+import {
+  useActiveUsers,
+  useActuatorV1Store,
+  useAppFeature,
+  useAuthStore,
+  useCurrentUserV1,
+  useSubscriptionV1Store,
+  useUIStateStore,
+} from "@/store";
+import { PlanType } from "@/types/proto/v1/subscription_service";
+import { hasWorkspacePermissionV2, isDev } from "@/utils";
+import ProfilePreview from "./ProfilePreview.vue";
+import UserAvatar from "./User/UserAvatar.vue";
+import Version from "./misc/Version.vue";
 
-export default {
-  name: "ProfileDropdown",
-  components: { PrincipalAvatar },
-  props: {},
-  setup() {
-    const store = useStore();
-    const router = useRouter();
-    const { setLocale, locale } = useLanguage();
-    const languageMenu = ref();
+const { t } = useI18n();
 
-    const currentUser = computed(() => store.getters["auth/currentUser"]());
+const props = defineProps<{
+  link?: boolean;
+}>();
 
-    const showQuickstart = computed(() => {
-      return !store.getters["actuator/isDemo"]();
+const actuatorStore = useActuatorV1Store();
+const authStore = useAuthStore();
+const subscriptionStore = useSubscriptionV1Store();
+const uiStateStore = useUIStateStore();
+const { setLocale, locale } = useLanguage();
+const currentUserV1 = useCurrentUserV1();
+const showDropdown = ref(false);
+const hideQuickstart = computed(() => {
+  if (useAppFeature("bb.feature.hide-quick-start").value) {
+    return true;
+  }
+  // Hide quickstart if there are more than 1 active users.
+  return useActiveUsers().length > 1;
+});
+const hideHelp = useAppFeature("bb.feature.hide-help");
+
+// For now, debug mode is a global setting and will affect all users.
+// So we only allow DBA and Owner to toggle it.
+const allowToggleDebug = computed(() => {
+  return hasWorkspacePermissionV2("bb.settings.set");
+});
+const { currentPlan } = storeToRefs(subscriptionStore);
+
+const logout = () => {
+  authStore.logout();
+};
+
+const resetQuickstart = () => {
+  const keys = [
+    "hidden",
+    "issue.visit",
+    "project.visit",
+    "environment.visit",
+    "instance.visit",
+    "database.visit",
+    "member.visit",
+    "kbar.open",
+    "data.query",
+    "help.issue.detail",
+    "help.project",
+    "help.environment",
+    "help.instance",
+    "help.database",
+    "help.member",
+  ];
+  keys.forEach((key) => {
+    uiStateStore.saveIntroStateByKey({
+      key,
+      newState: false,
     });
+  });
+  showDropdown.value = false;
+};
 
-    const logout = () => {
-      store.dispatch("auth/logout").then(() => {
-        router.push({ name: "auth.signin" });
-      });
-    };
+const { isDebug } = storeToRefs(actuatorStore);
 
-    const resetQuickstart = () => {
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "general.overview",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "bookmark.create",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "comment.create",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "project.visit",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "environment.visit",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "instance.visit",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "database.visit",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "member.addOrInvite",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "hidden",
-        newState: false,
-      });
+const switchDebug = () => {
+  actuatorStore.patchDebug({
+    debug: !isDebug.value,
+  });
+};
 
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "guide.project",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "guide.environment",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "guide.instance",
-        newState: false,
-      });
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "guide.database",
-        newState: false,
-      });
+const toggleLocale = (lang: string) => {
+  setLocale(lang);
+  showDropdown.value = false;
+};
 
-      store.dispatch("uistate/saveIntroStateByKey", {
-        key: "kbar.open",
-        newState: false,
-      });
-    };
+const switchPlan = (license: string) => {
+  subscriptionStore.patchSubscription(license);
+  showDropdown.value = false;
+};
 
-    const switchToOwner = () => {
-      store.dispatch("auth/login", {
-        payload: {
-          email: "demo@example.com",
-          password: "1024",
-        },
-      });
-    };
+const languageOptions = computed((): DropdownOption[] => {
+  const languages = [
+    {
+      label: "English",
+      value: "en-US",
+    },
+    {
+      label: "简体中文",
+      value: "zh-CN",
+    },
+    {
+      label: "Español",
+      value: "es-ES",
+    },
+    {
+      label: "日本語",
+      value: "ja-JP",
+    },
+  ];
 
-    const switchToDBA = () => {
-      store.dispatch("auth/login", {
-        payload: {
-          email: "jerry@example.com",
-          password: "aaa",
-        },
-      });
-    };
-
-    const switchToDeveloper = () => {
-      store.dispatch("auth/login", {
-        payload: {
-          email: "tom@example.com",
-          password: "aaa",
-        },
-      });
-    };
-
-    const isDebug = computed(() => store.getters["debug/isDebug"]());
-
-    const switchDebug = () => {
-      store.dispatch("debug/patchDebug", { isDebug: !isDebug.value });
-    };
-
-    const ping = () => {
-      store.dispatch("actuator/fetchInfo").then((info: ServerInfo) => {
-        store.dispatch("notification/pushNotification", {
-          module: "bytebase",
-          style: "SUCCESS",
-          title: info,
-        });
-      });
-    };
-
-    const toggleLocale = (lang: string) => {
-      setLocale(lang);
-      languageMenu.value.toggle();
-    };
+  return languages.map((item) => {
+    const classes: string[] = [
+      "menu-item cursor-pointer px-3 py-1 hover:bg-gray-100 w-48",
+    ];
+    if (locale.value === item.value) {
+      classes.push("bg-gray-100");
+    }
 
     return {
-      currentUser,
-      showQuickstart,
-      resetQuickstart,
-      logout,
-      switchToOwner,
-      switchToDBA,
-      switchToDeveloper,
-      isDebug,
-      switchDebug,
-      ping,
-      toggleLocale,
-      languageMenu,
-      locale,
+      key: item.value,
+      type: "render",
+      render() {
+        return h(
+          "div",
+          {
+            key: item.value,
+            class: classes.join(" "),
+            onClick: () => toggleLocale(item.value),
+          },
+          h("div", { class: "radio cursor-pointer text-sm" }, [
+            h("input", {
+              type: "radio",
+              class: "btn",
+              checked: locale.value === item.value,
+            }),
+            h("label", { class: "ml-2 cursor-pointer" }, item.label),
+          ])
+        );
+      },
     };
+  });
+});
+
+const licenseOptions = computed((): DropdownOption[] => {
+  const options = [
+    {
+      label: t("subscription.plan.free.title"),
+      value: "",
+      plan: PlanType.FREE,
+    },
+    {
+      label: t("subscription.plan.team.title"),
+      value: import.meta.env.BB_DEV_TEAM_LICENSE as string,
+      plan: PlanType.TEAM,
+    },
+    {
+      label: t("subscription.plan.enterprise.title"),
+      value: import.meta.env.BB_DEV_ENTERPRISE_LICENSE as string,
+      plan: PlanType.ENTERPRISE,
+    },
+  ];
+
+  return options.map((item) => {
+    const classes = ["menu-item px-3 py-1 hover:bg-gray-100 w-48"];
+    if (item.plan === currentPlan.value) {
+      classes.push("bg-gray-100");
+    }
+
+    return {
+      key: item.plan,
+      type: "render",
+      render() {
+        return h(
+          "div",
+          {
+            key: item.value,
+            class: classes.join(" "),
+            onClick: () => switchPlan(item.value),
+          },
+          h("div", { class: "radio cursor-pointer text-sm" }, [
+            h("input", {
+              type: "radio",
+              class: "btn",
+              checked: currentPlan.value === item.plan,
+            }),
+            h("label", { class: "ml-2 cursor-pointer" }, item.label),
+          ])
+        );
+      },
+    };
+  });
+});
+
+const options = computed((): DropdownOption[] => [
+  {
+    key: "profile",
+    type: "render",
+    render() {
+      return h(ProfilePreview, {
+        link: props.link,
+        onClick: () => (showDropdown.value = false),
+      });
+    },
   },
-};
+  {
+    key: "header-divider",
+    type: "divider",
+  },
+  {
+    key: "language",
+    type: "render",
+    render() {
+      return h(
+        NDropdown,
+        {
+          key: "switch-language",
+          options: languageOptions.value,
+          placement: "left-start",
+        },
+        () =>
+          h(
+            "div",
+            {
+              class: "menu-item",
+            },
+            t("common.language")
+          )
+      );
+    },
+  },
+  {
+    key: "license",
+    type: "render",
+    show: isDev(),
+    render() {
+      return h(
+        NDropdown,
+        {
+          key: "switch-license",
+          options: licenseOptions.value,
+          placement: "left-start",
+        },
+        () =>
+          h(
+            "div",
+            {
+              class: "menu-item",
+            },
+            t("common.license")
+          )
+      );
+    },
+  },
+  {
+    key: "quick-start",
+    type: "render",
+    show: !hideQuickstart.value,
+    render() {
+      return h(
+        "div",
+        {
+          class: "menu-item",
+          onClick: resetQuickstart,
+        },
+        t("quick-start.self")
+      );
+    },
+  },
+  {
+    key: "help",
+    type: "render",
+    show: !hideHelp.value,
+    render() {
+      return h(
+        "a",
+        {
+          class: "menu-item",
+          target: "_blank",
+          href: "https://bytebase.com/docs?source=console",
+        },
+        t("common.help")
+      );
+    },
+  },
+  {
+    key: "header-divider",
+    type: "divider",
+  },
+  {
+    key: "version",
+    type: "render",
+    render() {
+      return h(Version, { tooltipProps: { placement: "left" } });
+    },
+  },
+  {
+    key: "debug",
+    type: "render",
+    show: allowToggleDebug.value,
+    render() {
+      return h(
+        "div",
+        {
+          class: "menu-item",
+        },
+        [
+          h(
+            "div",
+            {
+              class: "flex flex-row items-center space-x-2 justify-between",
+            },
+            [
+              h("span", {}, "Debug"),
+              h(NSwitch, {
+                size: "small",
+                value: isDebug.value,
+                "onUpdate:value": switchDebug,
+              }),
+            ]
+          ),
+        ]
+      );
+    },
+  },
+  {
+    key: "header-divider",
+    type: "divider",
+    show: allowToggleDebug.value,
+  },
+  {
+    key: "logout",
+    type: "render",
+    render() {
+      return h(
+        "div",
+        {
+          class: "menu-item",
+          onClick: logout,
+        },
+        t("common.logout")
+      );
+    },
+  },
+]);
 </script>

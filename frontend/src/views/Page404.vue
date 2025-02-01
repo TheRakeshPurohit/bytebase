@@ -7,9 +7,9 @@
           <div
             class="mt-6 flex space-x-3 sm:border-l sm:border-transparent sm:pl-6"
           >
-            <button class="btn-primary" @click.prevent="goHome">
+            <NButton type="primary" @click.prevent="goHome">
               {{ $t("error-page.go-back-home") }}
-            </button>
+            </NButton>
           </div>
         </div>
       </main>
@@ -18,21 +18,14 @@
   </div>
 </template>
 
-<script lang="ts">
+<script lang="ts" setup>
+import { NButton } from "naive-ui";
 import { useRouter } from "vue-router";
+import { WORKSPACE_ROOT_MODULE } from "@/router/dashboard/workspaceRoutes";
 
-export default {
-  name: "ThePage404",
-  setup() {
-    const router = useRouter();
+const router = useRouter();
 
-    const goHome = () => {
-      router.push({ name: "workspace.home" });
-    };
-
-    return {
-      goHome,
-    };
-  },
+const goHome = () => {
+  router.push({ name: WORKSPACE_ROOT_MODULE });
 };
 </script>

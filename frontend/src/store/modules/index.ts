@@ -1,9 +1,24 @@
-// https://vitejs.dev/guide/features.html#glob-import
-const modules = Object.fromEntries(
-  Object.entries(import.meta.globEager("./*.ts")).map(([key, value]) => {
-    const moduleName = key.replace("./", "").replace(".ts", "");
-    return [moduleName, value.default];
-  })
-);
+export * from "./auth";
+export * from "./command";
+export * from "./help";
+export * from "./notification";
+export * from "./slowQueryPolicy";
+export * from "./router";
+export * from "./sqlEditor";
+export * from "./uistate";
+export * from "./sqlReview";
+export * from "./onboardingState";
+export * from "./idp";
+export * from "./user";
+export * from "./risk";
+export * from "./workspaceApprovalSetting";
+export * from "./slowQuery";
+export * from "./role";
+export * from "./dbGroup";
+export * from "./utils";
+export * from "./release";
+export * from "./revision";
+export * from "./rollout";
+export * from "./quickLink";
 
-export default modules;
+export * from "./v1";

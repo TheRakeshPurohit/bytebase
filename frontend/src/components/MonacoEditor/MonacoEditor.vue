@@ -1,229 +1,80 @@
 <template>
-  <div ref="editorRef" style="height: 100%; width: 100%"></div>
+  <MonacoTextModelEditor
+    ref="textModelEditorRef"
+    class="bb-monaco-editor"
+    :model="model"
+    @update:content="handleChange"
+  >
+    <template v-if="$slots['corner-prefix']" #corner-prefix>
+      <slot name="corner-prefix" />
+    </template>
+    <template v-if="$slots['corner-suffix']" #corner-suffix>
+      <slot name="corner-suffix" />
+    </template>
+  </MonacoTextModelEditor>
 </template>
 
-<script lang="ts" setup>
-import {
-  onMounted,
-  ref,
-  toRef,
-  toRaw,
-  PropType,
-  nextTick,
-  onUnmounted,
-  watch,
-} from "vue";
-import { useStore } from "vuex";
-import { useI18n } from "vue-i18n";
-import type { editor as Editor } from "monaco-editor";
+<script setup lang="ts">
+import { v4 as uuidv4 } from "uuid";
+import { computed, toRef } from "vue";
+import { ref } from "vue";
+import type { Language } from "@/types";
+import MonacoTextModelEditor from "./MonacoTextModelEditor.vue";
+import { useMonacoTextModel } from "./text-model";
+import { extensionNameOfLanguage } from "./utils";
 
-import { useMonaco } from "./useMonaco";
-import {
-  TabGetters,
-  SqlDialect,
-  SqlEditorActions,
-  SqlEditorState,
-  SheetGetters,
-} from "../../types";
-import {
-  useNamespacedActions,
-  useNamespacedGetters,
-  useNamespacedState,
-} from "vuex-composition-helpers";
+const textModelEditorRef = ref<InstanceType<typeof MonacoTextModelEditor>>();
 
-const props = defineProps({
-  value: {
-    type: String,
-    required: true,
-  },
-  language: {
-    type: String as PropType<SqlDialect>,
-    default: "mysql",
-  },
-});
-
+const props = withDefaults(
+  defineProps<{
+    filename?: string;
+    content: string;
+    language?: Language;
+  }>(),
+  {
+    filename: undefined,
+    language: "sql",
+  }
+);
 const emit = defineEmits<{
-  (e: "update:value", content: string): void;
-  (e: "change", content: string): void;
-  (e: "change-selection", content: string): void;
-  (
-    e: "run-query",
-    content: {
-      explain: boolean;
-      query: string;
-    }
-  ): void;
-  (e: "save", content: string): void;
+  (event: "update:content", content: string): void;
 }>();
 
-const editorRef = ref();
-const sqlCode = toRef(props, "value");
-const language = toRef(props, "language");
-
-const store = useStore();
-const { t } = useI18n();
-const { shouldSetContent } = useNamespacedState<SqlEditorState>("sqlEditor", [
-  "shouldSetContent",
-]);
-const { currentTab } = useNamespacedGetters<TabGetters>("tab", ["currentTab"]);
-const { isReadOnly } = useNamespacedGetters<SheetGetters>("sheet", [
-  "isReadOnly",
-]);
-const { setShouldSetContent } = useNamespacedActions<SqlEditorActions>(
-  "sqlEditor",
-  ["setShouldSetContent"]
-);
-
-let editorInstance: Editor.IStandaloneCodeEditor;
-
-const {
-  monaco,
-  setPositionAtEndOfLine,
-  formatContent,
-  setContent,
-  completionItemProvider,
-} = await useMonaco(language.value);
-
-const init = async () => {
-  const model = monaco.editor.createModel(sqlCode.value, toRaw(language.value));
-
-  editorInstance = monaco.editor.create(editorRef.value, {
-    model,
-    tabSize: 2,
-    insertSpaces: true,
-    autoClosingQuotes: "always",
-    detectIndentation: false,
-    folding: false,
-    automaticLayout: true,
-    theme: "vs-light",
-    minimap: {
-      enabled: false,
-    },
-    wordWrap: "on",
-    fixedOverflowWidgets: true,
-  });
-
-  // add the run query action in context menu
-  editorInstance.addAction({
-    id: "RunQuery",
-    label: "Run Query",
-    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
-    contextMenuGroupId: "operation",
-    contextMenuOrder: 0,
-    run: async () => {
-      const typedValue = editorInstance.getValue();
-      const selectedValue = editorInstance
-        .getModel()
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error
-        ?.getValueInRange(editorInstance.getSelection()) as string;
-
-      const query = selectedValue || typedValue;
-      emit("run-query", { explain: false, query });
-    },
-  });
-
-  // add the run query action in context menu
-  editorInstance.addAction({
-    id: "ExplainQuery",
-    label: "Explain Query",
-    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyE],
-    contextMenuGroupId: "operation",
-    contextMenuOrder: 0,
-    run: async () => {
-      const typedValue = editorInstance.getValue();
-      const selectedValue = editorInstance
-        .getModel()
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error
-        ?.getValueInRange(editorInstance.getSelection()) as string;
-
-      const query = selectedValue || typedValue;
-      emit("run-query", { explain: true, query });
-    },
-  });
-
-  // add format sql action in context menu
-  editorInstance.addAction({
-    id: "FormatSQL",
-    label: "Format SQL",
-    keybindings: [
-      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF,
-    ],
-    contextMenuGroupId: "operation",
-    contextMenuOrder: 1,
-    run: () => {
-      if (isReadOnly.value) {
-        store.dispatch("notification/pushNotification", {
-          module: "bytebase",
-          style: "INFO",
-          title: t("sql-editor.notify.sheet-is-read-only"),
-        });
-        return;
-      }
-      formatContent(editorInstance, language.value);
-      nextTick(() => setPositionAtEndOfLine(editorInstance));
-    },
-  });
-
-  // typed something, change the text
-  editorInstance.onDidChangeModelContent(() => {
-    const value = editorInstance.getValue();
-    // emit("update:value", value);
-    emit("change", value);
-  });
-
-  // when editor change selection, emit change-selection event with selected text
-  editorInstance.onDidChangeCursorSelection((e) => {
-    const selectedText = editorInstance.getModel()?.getValueInRange({
-      startLineNumber: e.selection.startLineNumber,
-      startColumn: e.selection.startColumn,
-      endLineNumber: e.selection.endLineNumber,
-      endColumn: e.selection.endColumn,
-    }) as string;
-    emit("change-selection", selectedText);
-  });
-
-  editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-    const value = editorInstance.getValue();
-    emit("save", value);
-  });
-
-  // set the editor focus when the tab is selected
-  if (!isReadOnly.value) {
-    editorInstance.focus();
-
-    nextTick(() => setPositionAtEndOfLine(editorInstance));
-  }
-
-  watch(
-    () => isReadOnly.value,
-    (readOnly) => {
-      if (editorInstance) {
-        editorInstance.updateOptions({ readOnly });
-      }
-    },
-    {
-      deep: true,
-      immediate: true,
-    }
-  );
-};
-
-onMounted(init);
-
-onUnmounted(() => {
-  completionItemProvider.dispose();
-  editorInstance.dispose();
+const content = computed({
+  get() {
+    return props.content;
+  },
+  set(content) {
+    emit("update:content", content);
+  },
 });
 
-watch(
-  () => shouldSetContent.value,
-  () => {
-    if (shouldSetContent.value) {
-      setShouldSetContent(false);
-      setContent(editorInstance, currentTab.value.statement);
-    }
-  }
-);
+const filename = computed(() => {
+  if (props.filename) return props.filename;
+
+  return `${uuidv4()}.${extensionNameOfLanguage(props.language)}`;
+});
+const model = useMonacoTextModel(filename, content, toRef(props, "language"));
+
+const handleChange = (value: string) => {
+  emit("update:content", value);
+};
+
+defineExpose({
+  get editor() {
+    return textModelEditorRef.value;
+  },
+});
 </script>
+
+<style lang="postcss" scoped>
+.bb-monaco-editor :deep(.monaco-editor .monaco-mouse-cursor-text) {
+  box-shadow: none !important;
+}
+.bb-monaco-editor :deep(.monaco-editor .scroll-decoration) {
+  display: none !important;
+}
+.bb-monaco-editor :deep(.monaco-editor .line-numbers) {
+  @apply pr-2;
+}
+</style>

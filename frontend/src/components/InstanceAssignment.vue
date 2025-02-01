@@ -1,0 +1,340 @@
+<template>
+  <Drawer :show="show" @close="$emit('dismiss')">
+    <DrawerContent
+      :title="$t('subscription.instance-assignment.manage-license')"
+      class="max-w-[100vw]"
+    >
+      <div class="divide-block-border space-y-5 w-[40rem] h-full">
+        <div>
+          <div class="flex space-x-2">
+            <div class="text-gray-400">
+              {{
+                $t("subscription.instance-assignment.used-and-total-license")
+              }}
+            </div>
+            <LearnMoreLink
+              url="https://www.bytebase.com/docs/administration/license?source=console"
+              class="ml-1 text-sm"
+            />
+          </div>
+          <div class="mt-1 text-4xl flex items-center gap-x-2">
+            <span>{{ assignedLicenseCount }}</span>
+            <span class="text-xl">/</span>
+            <span>{{ totalLicenseCount }}</span>
+          </div>
+        </div>
+        <BBGrid
+          class="border"
+          :column-list="columnList"
+          :data-source="instanceList"
+          :show-header="true"
+          :custom-header="true"
+          :row-clickable="false"
+        >
+          <template #header>
+            <div role="table-row" class="bb-grid-row bb-grid-header-row group">
+              <div
+                v-for="(column, index) in columnList"
+                :key="index"
+                role="table-cell"
+                class="bb-grid-header-cell capitalize"
+                :class="[column.class]"
+              >
+                <template v-if="index === 0 && canManageSubscription">
+                  <NCheckbox
+                    v-if="instanceList.length > 0"
+                    v-bind="allSelectionState"
+                    :disabled="
+                      !allSelectionState.checked &&
+                      instanceList.length > instanceLicenseCount
+                    "
+                    @update:checked="selectAllInstances($event)"
+                  />
+                </template>
+                <template v-else>{{ column.title }}</template>
+              </div>
+            </div>
+          </template>
+          <template #item="{ item: instance }: { item: InstanceResource }">
+            <div
+              v-if="canManageSubscription"
+              class="bb-grid-cell"
+              @click.stop.prevent
+            >
+              <NCheckbox
+                :checked="isInstanceSelected(instance)"
+                :disabled="
+                  !isInstanceSelected(instance) &&
+                  state.selectedInstance.size == instanceLicenseCount
+                "
+                @update:checked="toggleSelectInstance(instance, $event)"
+              />
+            </div>
+            <div class="bb-grid-cell">
+              <div class="flex items-center gap-x-1">
+                <InstanceV1EngineIcon :instance="instance" />
+                <router-link
+                  :to="`/${instance.name}`"
+                  class="hover:underline"
+                  active-class="link"
+                  exact-active-class="link"
+                >
+                  {{ instanceV1Name(instance) }}
+                </router-link>
+              </div>
+            </div>
+            <div class="bb-grid-cell">
+              <EnvironmentV1Name
+                :environment="
+                  environmentStore.getEnvironmentByName(instance.environment)
+                "
+                :link="false"
+              />
+            </div>
+            <div class="bb-grid-cell">
+              <EllipsisText class="w-10">
+                {{ hostPortOfInstanceV1(instance) }}
+              </EllipsisText>
+            </div>
+          </template>
+        </BBGrid>
+      </div>
+
+      <template #footer>
+        <div class="w-full flex justify-between items-center">
+          <div class="w-full flex justify-end items-center gap-x-3">
+            <NButton @click.prevent="cancel">
+              {{ $t("common.cancel") }}
+            </NButton>
+            <NButton
+              :disabled="
+                !canManageSubscription ||
+                !assignmentChanged ||
+                state.processing ||
+                state.selectedInstance.size > instanceLicenseCount
+              "
+              type="primary"
+              @click.prevent="updateAssignment"
+            >
+              {{ $t("common.confirm") }}
+            </NButton>
+          </div>
+        </div>
+      </template>
+    </DrawerContent>
+  </Drawer>
+</template>
+
+<script lang="ts" setup>
+import { NButton, NCheckbox } from "naive-ui";
+import { storeToRefs } from "pinia";
+import { reactive, computed, watchEffect } from "vue";
+import { useI18n } from "vue-i18n";
+import type { BBGridColumn } from "@/bbkit";
+import { BBGrid } from "@/bbkit";
+import EllipsisText from "@/components/EllipsisText.vue";
+import { EnvironmentV1Name, InstanceV1EngineIcon } from "@/components/v2";
+import { Drawer, DrawerContent } from "@/components/v2";
+import {
+  pushNotification,
+  useInstanceV1Store,
+  useSubscriptionV1Store,
+  useDatabaseV1Store,
+  useInstanceResourceList,
+  useEnvironmentV1Store,
+} from "@/store";
+import {
+  Instance,
+  type InstanceResource,
+} from "@/types/proto/v1/instance_service";
+import {
+  instanceV1Name,
+  hostPortOfInstanceV1,
+  hasWorkspacePermissionV2,
+} from "@/utils";
+import LearnMoreLink from "./LearnMoreLink.vue";
+
+const props = withDefaults(
+  defineProps<{
+    show: boolean;
+    selectedInstanceList?: string[];
+  }>(),
+  {
+    show: false,
+    selectedInstanceList: () => [],
+  }
+);
+
+interface LocalState {
+  selectedInstance: Set<string>;
+  processing: boolean;
+}
+
+const emit = defineEmits(["dismiss"]);
+
+const state = reactive<LocalState>({
+  selectedInstance: new Set(),
+  processing: false,
+});
+const environmentStore = useEnvironmentV1Store();
+const instanceV1Store = useInstanceV1Store();
+const databaseV1Store = useDatabaseV1Store();
+const subscriptionStore = useSubscriptionV1Store();
+const { t } = useI18n();
+
+const instanceList = useInstanceResourceList();
+const { instanceLicenseCount } = storeToRefs(subscriptionStore);
+
+const columnList = computed(() => {
+  const resp: BBGridColumn[] = [
+    {
+      title: t("common.name"),
+      width: "minmax(min-content, auto)",
+    },
+    {
+      title: t("common.environment"),
+      width: "minmax(min-content, auto)",
+    },
+    {
+      title: t("common.address"),
+      width: "minmax(min-content, auto)",
+    },
+  ];
+  if (canManageSubscription.value) {
+    resp.unshift({
+      // This column is for selection input.
+      title: "",
+      width: "minmax(auto, 3rem)",
+    });
+  }
+  return resp;
+});
+
+const canManageSubscription = computed((): boolean => {
+  return hasWorkspacePermissionV2("bb.instances.update");
+});
+
+watchEffect(() => {
+  for (const instance of instanceList.value) {
+    if (instance.activation) {
+      state.selectedInstance.add(instance.name);
+    }
+  }
+  for (const instance of props.selectedInstanceList) {
+    state.selectedInstance.add(instance);
+  }
+});
+
+const totalLicenseCount = computed((): string => {
+  if (instanceLicenseCount.value === Number.MAX_VALUE) {
+    return t("subscription.unlimited");
+  }
+  return `${instanceLicenseCount.value}`;
+});
+
+const assignedLicenseCount = computed((): string => {
+  return `${state.selectedInstance.size}`;
+});
+
+const isInstanceSelected = (instance: InstanceResource): boolean => {
+  return state.selectedInstance.has(instance.name);
+};
+
+const allSelectionState = computed(() => {
+  const checked =
+    state.selectedInstance.size > 0 &&
+    instanceList.value.every((instance) =>
+      state.selectedInstance.has(instance.name)
+    );
+  const indeterminate =
+    !checked &&
+    instanceList.value.some((instance) =>
+      state.selectedInstance.has(instance.name)
+    );
+
+  return {
+    checked,
+    indeterminate,
+  };
+});
+
+const toggleSelectInstance = (
+  instance: InstanceResource,
+  selected: boolean
+) => {
+  if (selected) {
+    state.selectedInstance.add(instance.name);
+  } else {
+    state.selectedInstance.delete(instance.name);
+  }
+};
+
+const selectAllInstances = (selected: boolean): void => {
+  for (const instance of instanceList.value) {
+    toggleSelectInstance(instance, selected);
+  }
+};
+
+const assignmentChanged = computed(() => {
+  for (const instance of instanceList.value) {
+    if (instance.activation && !state.selectedInstance.has(instance.name)) {
+      return true;
+    }
+    if (!instance.activation && state.selectedInstance.has(instance.name)) {
+      return true;
+    }
+  }
+  return false;
+});
+
+const cancel = () => {
+  emit("dismiss");
+};
+
+const updateAssignment = async () => {
+  if (state.processing) {
+    return;
+  }
+  state.processing = true;
+
+  const selectedInstanceName = new Set(state.selectedInstance);
+  // deactivate instance first to avoid quota limitation.
+  for (const instance of instanceList.value) {
+    if (instance.activation && !selectedInstanceName.has(instance.name)) {
+      // deactivate instance
+      instance.activation = false;
+      const composedInstance = await instanceV1Store.updateInstance(
+        Instance.fromPartial(instance),
+        ["activation"]
+      );
+      databaseV1Store.updateDatabaseInstance(composedInstance);
+    }
+    if (instance.activation && selectedInstanceName.has(instance.name)) {
+      // remove unchanged
+      selectedInstanceName.delete(instance.name);
+    }
+  }
+
+  for (const instanceName of selectedInstanceName.values()) {
+    const instance = instanceList.value.find((i) => i.name === instanceName);
+    if (!instance) {
+      continue;
+    }
+    // activate instance
+    instance.activation = true;
+    const composedInstance = await instanceV1Store.updateInstance(
+      Instance.fromPartial(instance),
+      ["activation"]
+    );
+    databaseV1Store.updateDatabaseInstance(composedInstance);
+  }
+
+  pushNotification({
+    module: "bytebase",
+    style: "SUCCESS",
+    title: t("subscription.instance-assignment.success-notification"),
+  });
+  state.processing = false;
+  emit("dismiss");
+};
+</script>

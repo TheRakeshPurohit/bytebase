@@ -1,0 +1,109 @@
+<template>
+  <div class="flex items-center gap-x-1">
+    <span v-if="semanticType?.title">{{ semanticType?.title }}</span>
+    <span v-else class="text-control-placeholder italic"> N/A </span>
+    <NPopconfirm
+      v-if="!readonly && semanticType"
+      @positive-click="() => onSemanticTypeApply('')"
+    >
+      <template #trigger>
+        <MiniActionButton v-if="!readonly && semanticType">
+          <XIcon class="w-3 h-3" />
+        </MiniActionButton>
+      </template>
+
+      <template #default>
+        <div>
+          {{ $t("settings.sensitive-data.remove-semantic-type-tips") }}
+        </div>
+      </template>
+    </NPopconfirm>
+    <MiniActionButton v-if="!readonly" @click.prevent="openSemanticTypeDrawer">
+      <PencilIcon class="w-3 h-3" />
+    </MiniActionButton>
+  </div>
+
+  <FeatureModal
+    feature="bb.feature.sensitive-data"
+    :instance="database.instanceResource"
+    :open="state.showFeatureModal"
+    @cancel="state.showFeatureModal = false"
+  />
+
+  <SemanticTypesDrawer
+    v-if="state.showSemanticTypesDrawer"
+    :show="true"
+    :semantic-type-list="semanticTypeList"
+    @dismiss="state.showSemanticTypesDrawer = false"
+    @apply="onSemanticTypeApply($event)"
+  />
+</template>
+
+<script lang="ts" setup>
+import { PencilIcon, XIcon } from "lucide-vue-next";
+import { NPopconfirm } from "naive-ui";
+import { computed, reactive } from "vue";
+import { useSemanticType } from "@/components/SensitiveData/useSemanticType";
+import { MiniActionButton } from "@/components/v2";
+import { useSubscriptionV1Store } from "@/store";
+import type { ComposedDatabase } from "@/types";
+import FeatureModal from "../FeatureGuard/FeatureModal.vue";
+import SemanticTypesDrawer from "../SensitiveData/components/SemanticTypesDrawer.vue";
+import { updateColumnCatalog } from "./utils";
+
+type LocalState = {
+  showFeatureModal: boolean;
+  showSemanticTypesDrawer: boolean;
+};
+
+const props = defineProps<{
+  database: ComposedDatabase;
+  schema: string;
+  table: string;
+  column: string;
+  readonly?: boolean;
+}>();
+
+const state = reactive<LocalState>({
+  showFeatureModal: false,
+  showSemanticTypesDrawer: false,
+});
+const subscriptionV1Store = useSubscriptionV1Store();
+const { semanticType, semanticTypeList } = useSemanticType({
+  database: props.database.name,
+  schema: props.schema,
+  table: props.table,
+  column: props.column,
+});
+
+const hasSensitiveDataFeature = computed(() => {
+  return subscriptionV1Store.hasFeature("bb.feature.sensitive-data");
+});
+
+const instanceMissingLicense = computed(() => {
+  return subscriptionV1Store.instanceMissingLicense(
+    "bb.feature.sensitive-data",
+    props.database.instanceResource
+  );
+});
+
+const openSemanticTypeDrawer = () => {
+  if (!hasSensitiveDataFeature.value || instanceMissingLicense.value) {
+    state.showFeatureModal = true;
+    return;
+  }
+
+  state.showSemanticTypesDrawer = true;
+};
+
+const onSemanticTypeApply = async (semanticType: string) => {
+  await updateColumnCatalog({
+    database: props.database.name,
+    schema: props.schema,
+    table: props.table,
+    column: props.column,
+    columnCatalog: { semanticType },
+    notification: !semanticType ? "common.removed" : undefined,
+  });
+};
+</script>

@@ -1,0 +1,86 @@
+- statement: |-
+    CREATE TABLE book(
+      id int,
+      name varchar(255))
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: '`book`.`id` cannot have NULL value'
+      detail: ""
+      startposition:
+        line: 2
+        column: 0
+      endposition: null
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: '`book`.`name` cannot have NULL value'
+      detail: ""
+      startposition:
+        line: 3
+        column: 0
+      endposition: null
+- statement: CREATE TABLE book(id int PRIMARY KEY, name varchar(255))
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: '`book`.`name` cannot have NULL value'
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: CREATE TABLE book(id int NOT NULL, name varchar(255))
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: '`book`.`name` cannot have NULL value'
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null
+- statement: CREATE TABLE book(id int PRIMARY KEY, name varchar(255) NOT NULL)
+  changeType: 0
+- statement: |-
+    CREATE TABLE book(a int NOT NULL);
+    ALTER TABLE book ADD COLUMN (id int, name varchar(255) NOT NULL);
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: '`book`.`id` cannot have NULL value'
+      detail: ""
+      startposition:
+        line: 2
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE book(a int NOT NULL);
+    ALTER TABLE book ADD COLUMN (id int PRIMARY KEY, name varchar(255) NOT NULL);
+  changeType: 0
+- statement: |-
+    CREATE TABLE book(id int NOT NULL);
+    ALTER TABLE book CHANGE COLUMN id name varchar(255);
+  changeType: 0
+  want:
+    - status: 2
+      code: 402
+      title: column.no-null
+      content: '`book`.`name` cannot have NULL value'
+      detail: ""
+      startposition:
+        line: 2
+        column: 0
+      endposition: null
+- statement: |-
+    CREATE TABLE book(id int NOT NULL);
+    ALTER TABLE book CHANGE COLUMN id name varchar(255) NOT NULL;
+  changeType: 0

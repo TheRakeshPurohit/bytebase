@@ -1,0 +1,12 @@
+- statement: DROP DATABASE IF EXISTS test
+  changeType: 0
+  want:
+    - status: 2
+      code: 701
+      title: database.drop-empty-database
+      content: Database `test` is not allowed to drop if not empty
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

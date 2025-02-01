@@ -1,0 +1,1041 @@
+package tidb
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log/slog"
+	"math/rand"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/pkg/errors"
+
+	"github.com/bytebase/bytebase/backend/common"
+	"github.com/bytebase/bytebase/backend/common/log"
+	"github.com/bytebase/bytebase/backend/plugin/db"
+	"github.com/bytebase/bytebase/backend/plugin/db/util"
+	"github.com/bytebase/bytebase/backend/plugin/parser/base"
+	mysqlparser "github.com/bytebase/bytebase/backend/plugin/parser/mysql"
+	storepb "github.com/bytebase/bytebase/proto/generated-go/store"
+)
+
+const (
+	autoIncrementSymbol    = "AUTO_INCREMENT"
+	autoRandSymbol         = "AUTO_RANDOM"
+	pkAutoRandomBitsSymbol = "PK_AUTO_RANDOM_BITS"
+)
+
+var (
+	systemDatabases = map[string]bool{
+		"information_schema": true,
+		"mysql":              true,
+		"performance_schema": true,
+		"sys":                true,
+		// TiDB only
+		"metrics_schema": true,
+	}
+	systemDatabaseClause = func() string {
+		var l []string
+		for k := range systemDatabases {
+			l = append(l, fmt.Sprintf("'%s'", k))
+		}
+		return strings.Join(l, ", ")
+	}()
+
+	pkAutoRandomBitsRegex = regexp.MustCompile(`PK_AUTO_RANDOM_BITS=(\d+)`)
+	RangeBitsRegex        = regexp.MustCompile(`RANGE BITS=(\d+)`)
+)
+
+// SyncInstance syncs the instance.
+func (driver *Driver) SyncInstance(ctx context.Context) (*db.InstanceMetadata, error) {
+	version, _, err := driver.getVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	lowerCaseTableNames := 0
+	lowerCaseTableNamesText, err := driver.getServerVariable(ctx, "lower_case_table_names")
+	if err != nil {
+		slog.Debug("failed to get lower_case_table_names variable", log.BBError(err))
+	} else {
+		lowerCaseTableNames, err = strconv.Atoi(lowerCaseTableNamesText)
+		if err != nil {
+			slog.Debug("failed to parse lower_case_table_names variable", log.BBError(err))
+		}
+	}
+
+	instanceRoles, err := driver.getInstanceRoles(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Query db info
+	where := fmt.Sprintf("LOWER(SCHEMA_NAME) NOT IN (%s)", systemDatabaseClause)
+	query := `
+		SELECT
+			SCHEMA_NAME,
+			DEFAULT_CHARACTER_SET_NAME,
+			DEFAULT_COLLATION_NAME
+		FROM information_schema.SCHEMATA
+		WHERE ` + where
+	rows, err := driver.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, query)
+	}
+	defer rows.Close()
+
+	var databases []*storepb.DatabaseSchemaMetadata
+	for rows.Next() {
+		database := &storepb.DatabaseSchemaMetadata{}
+		if err := rows.Scan(
+			&database.Name,
+			&database.CharacterSet,
+			&database.Collation,
+		); err != nil {
+			return nil, err
+		}
+		databases = append(databases, database)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &db.InstanceMetadata{
+		Version:   version,
+		Databases: databases,
+		Metadata: &storepb.InstanceMetadata{
+			MysqlLowerCaseTableNames: int32(lowerCaseTableNames),
+			Roles:                    instanceRoles,
+		},
+	}, nil
+}
+
+func (driver *Driver) getServerVariable(ctx context.Context, varName string) (string, error) {
+	db := driver.GetDB()
+	query := fmt.Sprintf("SHOW VARIABLES LIKE '%s'", varName)
+	var varNameFound, value string
+	if err := db.QueryRowContext(ctx, query).Scan(&varNameFound, &value); err != nil {
+		if err == sql.ErrNoRows {
+			return "", common.FormatDBErrorEmptyRowWithQuery(query)
+		}
+		return "", util.FormatErrorWithQuery(err, query)
+	}
+	if varName != varNameFound {
+		return "", errors.Errorf("expecting variable %s, but got %s", varName, varNameFound)
+	}
+	return value, nil
+}
+
+// SyncDBSchema syncs a single database schema.
+func (driver *Driver) SyncDBSchema(ctx context.Context) (*storepb.DatabaseSchemaMetadata, error) {
+	schemaMetadata := &storepb.SchemaMetadata{
+		Name: "",
+	}
+
+	// Query index info.
+	indexMap := make(map[db.TableKey]map[string]*storepb.IndexMetadata)
+	indexQuery := `
+		SELECT
+			TABLE_NAME,
+			INDEX_NAME,
+			COLUMN_NAME,
+			EXPRESSION,
+			SEQ_IN_INDEX,
+			INDEX_TYPE,
+			CASE NON_UNIQUE WHEN 0 THEN 1 ELSE 0 END AS IS_UNIQUE,
+			1,
+			INDEX_COMMENT
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = ?
+		ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`
+	indexRows, err := driver.db.QueryContext(ctx, indexQuery, driver.databaseName)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, indexQuery)
+	}
+	defer indexRows.Close()
+	for indexRows.Next() {
+		var tableName, indexName, indexType, comment, expression string
+		var columnName sql.NullString
+		var expressionName sql.NullString
+		var position int
+		var unique, visible bool
+		if err := indexRows.Scan(
+			&tableName,
+			&indexName,
+			&columnName,
+			&expressionName,
+			&position,
+			&indexType,
+			&unique,
+			&visible,
+			&comment,
+		); err != nil {
+			return nil, err
+		}
+		// TiDB use string "NULL" instead of NULL, so we check expression first which is
+		// different between TiDB and MySQL.
+		if expressionName.Valid {
+			expression = fmt.Sprintf("(%s)", expressionName.String)
+		} else if columnName.Valid {
+			expression = columnName.String
+		}
+
+		key := db.TableKey{Schema: "", Table: tableName}
+		if _, ok := indexMap[key]; !ok {
+			indexMap[key] = make(map[string]*storepb.IndexMetadata)
+		}
+		if _, ok := indexMap[key][indexName]; !ok {
+			indexMap[key][indexName] = &storepb.IndexMetadata{
+				Name:    indexName,
+				Type:    indexType,
+				Unique:  unique,
+				Primary: indexName == "PRIMARY",
+				Visible: visible,
+				Comment: comment,
+			}
+		}
+		indexMap[key][indexName].Expressions = append(indexMap[key][indexName].Expressions, expression)
+	}
+	if err := indexRows.Err(); err != nil {
+		return nil, util.FormatErrorWithQuery(err, indexQuery)
+	}
+
+	// Query index key length info.
+	indexKeyLengthQuery := `
+		SELECT
+			TABLE_NAME,
+			KEY_NAME,
+			COLUMN_NAME,
+			SUB_PART
+		FROM information_schema.TIDB_INDEXES
+		WHERE TABLE_SCHEMA = ?
+		ORDER BY TABLE_NAME, KEY_NAME, SEQ_IN_INDEX`
+	indexKeyLengthRows, err := driver.db.QueryContext(ctx, indexKeyLengthQuery, driver.databaseName)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, indexKeyLengthQuery)
+	}
+	defer indexKeyLengthRows.Close()
+	for indexKeyLengthRows.Next() {
+		var tableName, keyName, columnName string
+		var subPart sql.NullInt64
+		if err := indexKeyLengthRows.Scan(
+			&tableName,
+			&keyName,
+			&columnName,
+			&subPart,
+		); err != nil {
+			return nil, err
+		}
+
+		key := db.TableKey{Schema: "", Table: tableName}
+		if _, ok := indexMap[key]; !ok {
+			slog.Debug("trying to sync key length but index not found", slog.String("tableName", tableName), slog.String("keyName", keyName))
+			continue
+		}
+		if subPart.Valid {
+			indexMap[key][keyName].KeyLength = append(indexMap[key][keyName].KeyLength, subPart.Int64)
+		} else {
+			// -1 means no key length limit.
+			indexMap[key][keyName].KeyLength = append(indexMap[key][keyName].KeyLength, -1)
+		}
+	}
+	if err := indexKeyLengthRows.Err(); err != nil {
+		return nil, util.FormatErrorWithQuery(err, indexKeyLengthQuery)
+	}
+
+	// Query column info.
+	columnMap := make(map[db.TableKey][]*storepb.ColumnMetadata)
+	columnQuery := `
+		SELECT
+			TABLE_NAME,
+			IFNULL(COLUMN_NAME, ''),
+			ORDINAL_POSITION,
+			CASE WHEN COLUMN_DEFAULT is NULL THEN NULL ELSE QUOTE(COLUMN_DEFAULT) END,
+			IS_NULLABLE,
+			COLUMN_TYPE,
+			IFNULL(CHARACTER_SET_NAME, ''),
+			IFNULL(COLLATION_NAME, ''),
+			QUOTE(COLUMN_COMMENT),
+			EXTRA
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = ?
+		ORDER BY TABLE_NAME, ORDINAL_POSITION`
+	columnRows, err := driver.db.QueryContext(ctx, columnQuery, driver.databaseName)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, columnQuery)
+	}
+	defer columnRows.Close()
+	for columnRows.Next() {
+		column := &storepb.ColumnMetadata{}
+		var tableName, nullable, extra, tp string
+		var defaultStr sql.NullString
+		if err := columnRows.Scan(
+			&tableName,
+			&column.Name,
+			&column.Position,
+			&defaultStr,
+			&nullable,
+			&tp,
+			&column.CharacterSet,
+			&column.Collation,
+			&column.Comment,
+			&extra,
+		); err != nil {
+			return nil, err
+		}
+		// Quoted string has a single quote around it.
+		column.Comment = stripSingleQuote(column.Comment)
+		if defaultStr.Valid {
+			defaultStr.String = stripSingleQuote(defaultStr.String)
+		}
+
+		nullableBool, err := util.ConvertYesNo(nullable)
+		if err != nil {
+			return nil, err
+		}
+		column.Type = GetColumnTypeCanonicalSynonym(tp)
+		column.Nullable = nullableBool
+		setColumnMetadataDefault(column, defaultStr, nullableBool, extra)
+		key := db.TableKey{Schema: "", Table: tableName}
+		columnMap[key] = append(columnMap[key], column)
+	}
+	if err := columnRows.Err(); err != nil {
+		return nil, util.FormatErrorWithQuery(err, columnQuery)
+	}
+
+	// Query view info.
+	viewMap := make(map[db.TableKey]*storepb.ViewMetadata)
+	viewQuery := `
+		SELECT
+			TABLE_NAME,
+			VIEW_DEFINITION
+		FROM information_schema.VIEWS
+		WHERE TABLE_SCHEMA = ?`
+	viewRows, err := driver.db.QueryContext(ctx, viewQuery, driver.databaseName)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, viewQuery)
+	}
+	defer viewRows.Close()
+	for viewRows.Next() {
+		view := &storepb.ViewMetadata{}
+		if err := viewRows.Scan(
+			&view.Name,
+			&view.Definition,
+		); err != nil {
+			return nil, err
+		}
+		key := db.TableKey{Schema: "", Table: view.Name}
+		view.Columns = columnMap[key]
+		viewMap[key] = view
+	}
+	if err := viewRows.Err(); err != nil {
+		return nil, util.FormatErrorWithQuery(err, viewQuery)
+	}
+
+	// Query foreign key info.
+	foreignKeysMap, err := driver.getForeignKeyList(ctx, driver.databaseName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Query partition info.
+	partitionTables, err := driver.listPartitionTables(ctx, driver.databaseName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Query table info.
+	tableQuery := `
+		SELECT
+			TABLE_NAME,
+			TABLE_TYPE,
+			IFNULL(ENGINE, ''),
+			IFNULL(TABLE_COLLATION, ''),
+			IFNULL(TABLE_ROWS, 0),
+			IFNULL(DATA_LENGTH, 0),
+			IFNULL(INDEX_LENGTH, 0),
+			IFNULL(DATA_FREE, 0),
+			IFNULL(CREATE_OPTIONS, ''),
+			QUOTE(IFNULL(TABLE_COMMENT, '')),
+			IFNULL(TIDB_ROW_ID_SHARDING_INFO, '')
+		FROM information_schema.TABLES
+		WHERE TABLE_SCHEMA = ?
+		ORDER BY TABLE_NAME`
+
+	tableRows, err := driver.db.QueryContext(ctx, tableQuery, driver.databaseName)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, tableQuery)
+	}
+	defer tableRows.Close()
+	for tableRows.Next() {
+		var tableName, tableType, engine, collation, createOptions, comment, shardingInfo string
+		var rowCount, dataSize, indexSize, dataFree int64
+		// Workaround TiDB bug https://github.com/pingcap/tidb/issues/27970
+		var tableCollation sql.NullString
+		if err := tableRows.Scan(
+			&tableName,
+			&tableType,
+			&engine,
+			&collation,
+			&rowCount,
+			&dataSize,
+			&indexSize,
+			&dataFree,
+			&createOptions,
+			&comment,
+			&shardingInfo,
+		); err != nil {
+			return nil, err
+		}
+		// Quoted string has a single quote around it.
+		comment = stripSingleQuote(comment)
+
+		key := db.TableKey{Schema: "", Table: tableName}
+		switch tableType {
+		case baseTableType:
+			columns := columnMap[key]
+			// Set auto random default value for TiDB.
+			if strings.Contains(shardingInfo, pkAutoRandomBitsSymbol) {
+				autoRandText := autoRandSymbol
+				if randomBitsMatch := pkAutoRandomBitsRegex.FindStringSubmatch(shardingInfo); len(randomBitsMatch) > 1 {
+					if rangeBitsMatch := RangeBitsRegex.FindStringSubmatch(shardingInfo); len(rangeBitsMatch) > 1 {
+						autoRandText += fmt.Sprintf("(%s, %s)", randomBitsMatch[1], rangeBitsMatch[1])
+					} else {
+						autoRandText += fmt.Sprintf("(%s)", randomBitsMatch[1])
+					}
+				}
+				if indexes, ok := indexMap[key]; ok {
+					for _, index := range indexes {
+						if index.Primary {
+							if len(index.Expressions) > 0 {
+								columnName := index.Expressions[0]
+								for i, column := range columns {
+									if column.Name == columnName {
+										newColumn := columns[i]
+										newColumn.DefaultValue = &storepb.ColumnMetadata_DefaultExpression{DefaultExpression: autoRandText}
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			tableMetadata := &storepb.TableMetadata{
+				Name:          tableName,
+				Columns:       columns,
+				ForeignKeys:   foreignKeysMap[key],
+				Engine:        engine,
+				Collation:     collation,
+				RowCount:      rowCount,
+				DataSize:      dataSize,
+				IndexSize:     indexSize,
+				DataFree:      dataFree,
+				CreateOptions: createOptions,
+				Comment:       comment,
+				Partitions:    partitionTables[key],
+			}
+			if tableCollation.Valid {
+				tableMetadata.Collation = tableCollation.String
+			}
+			var indexNames []string
+			if indexes, ok := indexMap[key]; ok {
+				for indexName := range indexes {
+					indexNames = append(indexNames, indexName)
+				}
+				sort.Strings(indexNames)
+				for _, indexName := range indexNames {
+					tableMetadata.Indexes = append(tableMetadata.Indexes, indexes[indexName])
+				}
+			}
+
+			schemaMetadata.Tables = append(schemaMetadata.Tables, tableMetadata)
+		case viewTableType:
+			if view, ok := viewMap[key]; ok {
+				schemaMetadata.Views = append(schemaMetadata.Views, view)
+			}
+		}
+	}
+	if err := tableRows.Err(); err != nil {
+		return nil, util.FormatErrorWithQuery(err, tableQuery)
+	}
+
+	databaseMetadata := &storepb.DatabaseSchemaMetadata{
+		Name:    driver.databaseName,
+		Schemas: []*storepb.SchemaMetadata{schemaMetadata},
+	}
+	// Query db info.
+	databaseQuery := `
+		SELECT
+			DEFAULT_CHARACTER_SET_NAME,
+			DEFAULT_COLLATION_NAME
+		FROM information_schema.SCHEMATA
+		WHERE SCHEMA_NAME = ?`
+	if err := driver.db.QueryRowContext(ctx, databaseQuery, driver.databaseName).Scan(
+		&databaseMetadata.CharacterSet,
+		&databaseMetadata.Collation,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, common.Errorf(common.NotFound, "database %q not found", driver.databaseName)
+		}
+		return nil, err
+	}
+
+	return databaseMetadata, err
+}
+
+func setColumnMetadataDefault(column *storepb.ColumnMetadata, defaultStr sql.NullString, nullableBool bool, extra string) {
+	if defaultStr.Valid {
+		// In TiDB 7, the extra value is empty for a column with CURRENT_TIMESTAMP default.
+		switch {
+		case isCurrentTimestampLike(defaultStr.String):
+			column.DefaultValue = &storepb.ColumnMetadata_DefaultExpression{DefaultExpression: defaultStr.String}
+		case strings.Contains(extra, "DEFAULT_GENERATED"):
+			column.DefaultValue = &storepb.ColumnMetadata_DefaultExpression{DefaultExpression: fmt.Sprintf("(%s)", defaultStr.String)}
+		default:
+			// For non-generated and non CURRENT_XXX default value, use string.
+			column.DefaultValue = &storepb.ColumnMetadata_Default{Default: &wrapperspb.StringValue{Value: defaultStr.String}}
+		}
+	} else if strings.Contains(strings.ToUpper(extra), autoIncrementSymbol) {
+		// TODO(zp): refactor column default value.
+		// Use the upper case to consistent with MySQL Dump.
+		column.DefaultValue = &storepb.ColumnMetadata_DefaultExpression{DefaultExpression: autoIncrementSymbol}
+	} else if nullableBool {
+		// This is NULL if the column has an explicit default of NULL,
+		// or if the column definition includes no DEFAULT clause.
+		// https://dev.mysql.com/doc/refman/8.0/en/information-schema-columns-table.html
+		column.DefaultValue = &storepb.ColumnMetadata_DefaultNull{
+			DefaultNull: true,
+		}
+	}
+
+	if strings.Contains(extra, "on update CURRENT_TIMESTAMP") {
+		re := regexp.MustCompile(`CURRENT_TIMESTAMP\((\d+)\)`)
+		match := re.FindStringSubmatch(extra)
+		if len(match) > 0 {
+			digits := match[1]
+			column.OnUpdate = fmt.Sprintf("CURRENT_TIMESTAMP(%s)", digits)
+		} else {
+			column.OnUpdate = "CURRENT_TIMESTAMP"
+		}
+	}
+}
+
+func isCurrentTimestampLike(s string) bool {
+	upper := strings.ToUpper(s)
+	if strings.HasPrefix(upper, "CURRENT_TIMESTAMP") {
+		return true
+	}
+	if strings.HasPrefix(upper, "CURRENT_DATE") {
+		return true
+	}
+	return false
+}
+
+func (driver *Driver) listPartitionTables(ctx context.Context, databaseName string) (map[db.TableKey][]*storepb.TablePartitionMetadata, error) {
+	const query string = `
+		SELECT
+			TABLE_NAME,
+			PARTITION_NAME,
+			SUBPARTITION_NAME,
+			PARTITION_METHOD,
+			SUBPARTITION_METHOD,
+			PARTITION_EXPRESSION,
+			SUBPARTITION_EXPRESSION,
+			PARTITION_DESCRIPTION
+		FROM INFORMATION_SCHEMA.PARTITIONS
+		WHERE TABLE_SCHEMA = ? AND PARTITION_NAME IS NOT NULL
+		ORDER BY TABLE_NAME ASC, PARTITION_NAME ASC, SUBPARTITION_NAME ASC, PARTITION_ORDINAL_POSITION ASC, SUBPARTITION_ORDINAL_POSITION ASC;
+	`
+	// Prepare the query statement.
+	stmt, err := driver.db.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to prepare query: %s", query)
+	}
+	defer stmt.Close()
+	rows, err := stmt.QueryContext(ctx, databaseName)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, query)
+	}
+	defer rows.Close()
+
+	type partitionKey struct {
+		tableName     string
+		partitionName string
+	}
+
+	partitionMap := make(map[partitionKey]int)
+	result := make(map[db.TableKey][]*storepb.TablePartitionMetadata)
+
+	for rows.Next() {
+		var tableName, partitionName, partitionMethod string
+		var subpartitionName, subpartitionMethod, subpartitionExpression, partitionExpression, partitionDescription sql.NullString
+		if err := rows.Scan(
+			&tableName,
+			&partitionName,
+			&subpartitionName,
+			&partitionMethod,
+			&subpartitionMethod,
+			&partitionExpression,
+			&subpartitionExpression,
+			&partitionDescription,
+		); err != nil {
+			return nil, errors.Wrapf(err, "failed to scan row")
+		}
+		partitionKey := partitionKey{tableName: tableName, partitionName: partitionName}
+		tableKey := db.TableKey{Schema: "", Table: tableName}
+
+		if _, ok := partitionMap[partitionKey]; !ok {
+			// Partition
+			tp := convertToStorepbTablePartitionType(partitionMethod)
+			if tp == storepb.TablePartitionMetadata_TYPE_UNSPECIFIED {
+				slog.Warn("unknown partition type", slog.String("partitionMethod", partitionMethod))
+				continue
+			}
+			// For the key partition, it can take zero or more columns, the partition expression is null if taken zero columns.
+			expression := ""
+			if partitionExpression.Valid {
+				expression = partitionExpression.String
+			}
+
+			value := ""
+			if partitionDescription.Valid {
+				value = partitionDescription.String
+			}
+
+			partition := &storepb.TablePartitionMetadata{
+				Name:          partitionName,
+				Type:          tp,
+				Expression:    expression,
+				Value:         value,
+				Subpartitions: []*storepb.TablePartitionMetadata{},
+			}
+			partitionMap[partitionKey] = len(result[tableKey])
+			result[tableKey] = append(result[tableKey], partition)
+		}
+
+		if subpartitionName.Valid {
+			tp := convertToStorepbTablePartitionType(subpartitionMethod.String)
+			if tp == storepb.TablePartitionMetadata_TYPE_UNSPECIFIED {
+				slog.Warn("unknown subpartition type", slog.String("subpartitionMethod", subpartitionMethod.String))
+				continue
+			}
+			// For the key partition, it can take zero or more columns, the partition expression is null if taken zero columns.
+			expression := ""
+			if partitionExpression.Valid {
+				expression = subpartitionExpression.String
+			}
+
+			value := ""
+			if partitionDescription.Valid {
+				value = partitionDescription.String
+			}
+
+			subPartition := &storepb.TablePartitionMetadata{
+				Name:          subpartitionName.String,
+				Type:          tp,
+				Expression:    expression,
+				Value:         value,
+				Subpartitions: []*storepb.TablePartitionMetadata{},
+			}
+
+			if idx, ok := partitionMap[partitionKey]; !ok {
+				slog.Warn("subpartition without partition", slog.String("tableName", tableName), slog.String("partitionName", partitionName), slog.String("subpartitionName", subpartitionName.String))
+			} else {
+				result[tableKey][idx].Subpartitions = append(result[tableKey][idx].Subpartitions, subPartition)
+			}
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrapf(err, "failed to scan row")
+	}
+
+	return result, nil
+}
+
+func convertToStorepbTablePartitionType(tp string) storepb.TablePartitionMetadata_Type {
+	switch strings.ToUpper(tp) {
+	case "RANGE":
+		return storepb.TablePartitionMetadata_RANGE
+	case "RANGE COLUMNS":
+		return storepb.TablePartitionMetadata_RANGE_COLUMNS
+	case "LIST":
+		return storepb.TablePartitionMetadata_LIST
+	case "LIST COLUMNS":
+		return storepb.TablePartitionMetadata_LIST_COLUMNS
+	case "HASH":
+		return storepb.TablePartitionMetadata_HASH
+	case "KEY":
+		return storepb.TablePartitionMetadata_KEY
+	case "LINEAR HASH":
+		return storepb.TablePartitionMetadata_LINEAR_HASH
+	case "LINEAR KEY":
+		return storepb.TablePartitionMetadata_LINEAR_KEY
+	default:
+		return storepb.TablePartitionMetadata_TYPE_UNSPECIFIED
+	}
+}
+
+func (driver *Driver) getForeignKeyList(ctx context.Context, databaseName string) (map[db.TableKey][]*storepb.ForeignKeyMetadata, error) {
+	fkQuery := `
+		SELECT
+			fks.TABLE_NAME,
+			fks.CONSTRAINT_NAME,
+			kcu.COLUMN_NAME,
+			'',
+			fks.REFERENCED_TABLE_NAME,
+			kcu.REFERENCED_COLUMN_NAME,
+			fks.DELETE_RULE,
+			fks.UPDATE_RULE,
+			fks.MATCH_OPTION
+		FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS fks
+			JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+			ON fks.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA
+				AND fks.TABLE_NAME = kcu.TABLE_NAME
+				AND fks.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+		WHERE kcu.POSITION_IN_UNIQUE_CONSTRAINT IS NOT NULL AND LOWER(fks.CONSTRAINT_SCHEMA) = ?
+		ORDER BY fks.TABLE_NAME, fks.CONSTRAINT_NAME, kcu.ORDINAL_POSITION;
+	`
+
+	fkRows, err := driver.db.QueryContext(ctx, fkQuery, databaseName)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, fkQuery)
+	}
+	defer fkRows.Close()
+	foreignKeysMap := make(map[db.TableKey][]*storepb.ForeignKeyMetadata)
+	var buildingFk *storepb.ForeignKeyMetadata
+	var buildingTable string
+	for fkRows.Next() {
+		var tableName string
+		var fk storepb.ForeignKeyMetadata
+		var column, referencedColumn string
+		if err := fkRows.Scan(
+			&tableName,
+			&fk.Name,
+			&column,
+			&fk.ReferencedSchema,
+			&fk.ReferencedTable,
+			&referencedColumn,
+			&fk.OnDelete,
+			&fk.OnUpdate,
+			&fk.MatchType,
+		); err != nil {
+			return nil, err
+		}
+
+		fk.Columns = append(fk.Columns, column)
+		fk.ReferencedColumns = append(fk.ReferencedColumns, referencedColumn)
+		if buildingFk == nil {
+			buildingTable = tableName
+			buildingFk = &fk
+		} else {
+			if tableName == buildingTable && buildingFk.Name == fk.Name {
+				buildingFk.Columns = append(buildingFk.Columns, fk.Columns[0])
+				buildingFk.ReferencedColumns = append(buildingFk.ReferencedColumns, fk.ReferencedColumns[0])
+			} else {
+				key := db.TableKey{Schema: "", Table: buildingTable}
+				foreignKeysMap[key] = append(foreignKeysMap[key], buildingFk)
+				buildingTable = tableName
+				buildingFk = &fk
+			}
+		}
+	}
+	if err := fkRows.Err(); err != nil {
+		return nil, util.FormatErrorWithQuery(err, fkQuery)
+	}
+
+	if buildingFk != nil {
+		key := db.TableKey{Schema: "", Table: buildingTable}
+		foreignKeysMap[key] = append(foreignKeysMap[key], buildingFk)
+	}
+
+	return foreignKeysMap, nil
+}
+
+type slowLog struct {
+	database string
+	details  *storepb.SlowQueryDetails
+}
+
+// SyncSlowQuery syncs slow query from mysql.slow_log.
+func (driver *Driver) SyncSlowQuery(ctx context.Context, logDateTs time.Time) (map[string]*storepb.SlowQueryStatistics, error) {
+	var timeZone string
+	// The MySQL function convert_tz requires loading the time zone table into MySQL.
+	// So we convert time zone in backend instead of MySQL server
+	// https://stackoverflow.com/questions/14454304/convert-tz-returns-null
+	timeZoneQuery := `SELECT @@log_timestamps, @@system_time_zone;`
+	timeZoneRows, err := driver.db.QueryContext(ctx, timeZoneQuery)
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, timeZoneQuery)
+	}
+	defer timeZoneRows.Close()
+	for timeZoneRows.Next() {
+		var logTimeZone, systemTimeZone string
+		if err := timeZoneRows.Scan(&logTimeZone, &systemTimeZone); err != nil {
+			return nil, err
+		}
+
+		timeZone = logTimeZone
+		if strings.ToLower(logTimeZone) == "system" {
+			timeZone = systemTimeZone
+		}
+	}
+	if err := timeZoneRows.Err(); err != nil {
+		return nil, util.FormatErrorWithQuery(err, timeZoneQuery)
+	}
+
+	location, err := time.LoadLocation(timeZone)
+	if err != nil {
+		slog.Debug("failed to load time zone", slog.String("timeZone", timeZone), log.BBError(err))
+		location, err = time.LoadLocation("Local")
+		if err != nil {
+			// This should never happen
+			slog.Debug("failed to load time zone", slog.String("timeZone", "Local"), log.BBError(err))
+		}
+	}
+
+	logs := make([]*slowLog, 0, db.SlowQueryMaxSamplePerDay)
+	query := `
+		SELECT
+			start_time,
+			query_time,
+			lock_time,
+			rows_sent,
+			rows_examined,
+			db,
+			CONVERT(sql_text USING utf8) AS sql_text
+		FROM
+			mysql.slow_log
+		WHERE
+			start_time >= ?
+			AND start_time < ?
+	`
+
+	slowLogRows, err := driver.db.QueryContext(ctx, query, logDateTs.Format("2006-01-02"), logDateTs.AddDate(0, 0, 1).Format("2006-01-02"))
+	if err != nil {
+		return nil, util.FormatErrorWithQuery(err, query)
+	}
+	defer slowLogRows.Close()
+	for slowLogRows.Next() {
+		log := slowLog{
+			details: &storepb.SlowQueryDetails{},
+		}
+		var startTime, queryTime, lockTime string
+		if err := slowLogRows.Scan(
+			&startTime,
+			&queryTime,
+			&lockTime,
+			&log.details.RowsSent,
+			&log.details.RowsExamined,
+			&log.database,
+			&log.details.SqlText,
+		); err != nil {
+			return nil, err
+		}
+
+		startTimeTs, err := time.ParseInLocation("2006-01-02 15:04:05.999999", startTime, location)
+		if err != nil {
+			return nil, err
+		}
+		log.details.StartTime = timestamppb.New(startTimeTs)
+
+		queryTimeDuration, err := parseDuration(queryTime)
+		if err != nil {
+			return nil, err
+		}
+		log.details.QueryTime = durationpb.New(queryTimeDuration)
+
+		lockTimeDuration, err := parseDuration(lockTime)
+		if err != nil {
+			return nil, err
+		}
+		log.details.LockTime = durationpb.New(lockTimeDuration)
+
+		// Use Reservoir Sampling to sample slow logs.
+		// See https://en.wikipedia.org/wiki/Reservoir_sampling
+		if len(logs) < db.SlowQueryMaxSamplePerDay {
+			logs = append(logs, &log)
+		} else {
+			pos := rand.Intn(len(logs))
+			logs[pos] = &log
+		}
+	}
+
+	if err := slowLogRows.Err(); err != nil {
+		return nil, util.FormatErrorWithQuery(err, query)
+	}
+
+	return analyzeSlowLog(driver.dbType, logs)
+}
+
+func parseDuration(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	list := strings.Split(s, ":")
+	if len(list) != 3 {
+		return 0, errors.Errorf("invalid duration: %s", s)
+	}
+	duration := fmt.Sprintf("%sh%sm%ss", list[0], list[1], list[2])
+	return time.ParseDuration(duration)
+}
+
+func analyzeSlowLog(engine storepb.Engine, logs []*slowLog) (map[string]*storepb.SlowQueryStatistics, error) {
+	logMap := make(map[string]map[string]*storepb.SlowQueryStatisticsItem)
+
+	for _, log := range logs {
+		databaseList := extractDatabase(engine, log.database, log.details.SqlText)
+		fingerprint, err := mysqlparser.GetFingerprint(log.details.SqlText)
+		if err != nil {
+			return nil, errors.Wrapf(err, "get sql fingerprint failed, sql: %s", log.details.SqlText)
+		}
+		if len(fingerprint) > db.SlowQueryMaxLen {
+			fingerprint, _ = common.TruncateString(fingerprint, db.SlowQueryMaxLen)
+		}
+		if len(log.details.SqlText) > db.SlowQueryMaxLen {
+			log.details.SqlText, _ = common.TruncateString(log.details.SqlText, db.SlowQueryMaxLen)
+		}
+
+		for _, db := range databaseList {
+			if _, ok := logMap[db]; !ok {
+				logMap[db] = make(map[string]*storepb.SlowQueryStatisticsItem)
+			}
+			logMap[db][fingerprint] = mergeSlowLog(fingerprint, logMap[db][fingerprint], log.details)
+		}
+	}
+
+	var result = make(map[string]*storepb.SlowQueryStatistics)
+
+	for db, dblog := range logMap {
+		var statisticsList storepb.SlowQueryStatistics
+		for _, statistics := range dblog {
+			statisticsList.Items = append(statisticsList.Items, statistics)
+		}
+		result[db] = &statisticsList
+	}
+
+	return result, nil
+}
+
+func mergeSlowLog(fingerprint string, statistics *storepb.SlowQueryStatisticsItem, details *storepb.SlowQueryDetails) *storepb.SlowQueryStatisticsItem {
+	if statistics == nil {
+		return &storepb.SlowQueryStatisticsItem{
+			SqlFingerprint:      fingerprint,
+			Count:               1,
+			LatestLogTime:       details.StartTime,
+			TotalQueryTime:      details.QueryTime,
+			MaximumQueryTime:    details.QueryTime,
+			TotalRowsSent:       details.RowsSent,
+			MaximumRowsSent:     details.RowsSent,
+			TotalRowsExamined:   details.RowsExamined,
+			MaximumRowsExamined: details.RowsExamined,
+			Samples:             []*storepb.SlowQueryDetails{details},
+		}
+	}
+	statistics.Count++
+	if statistics.LatestLogTime.AsTime().Before(details.StartTime.AsTime()) {
+		statistics.LatestLogTime = details.StartTime
+	}
+	statistics.TotalQueryTime = durationpb.New(statistics.TotalQueryTime.AsDuration() + details.QueryTime.AsDuration())
+	if statistics.MaximumQueryTime.AsDuration() < details.QueryTime.AsDuration() {
+		statistics.MaximumQueryTime = details.QueryTime
+	}
+	statistics.TotalRowsSent += details.RowsSent
+	if statistics.MaximumRowsSent < details.RowsSent {
+		statistics.MaximumRowsSent = details.RowsSent
+	}
+	statistics.TotalRowsExamined += details.RowsExamined
+	if statistics.MaximumRowsExamined < details.RowsExamined {
+		statistics.MaximumRowsExamined = details.RowsExamined
+	}
+	if len(statistics.Samples) < db.SlowQueryMaxSamplePerFingerprint {
+		statistics.Samples = append(statistics.Samples, details)
+	} else {
+		// Use Reservoir Sampling to sample slow logs.
+		pos := rand.Intn(len(statistics.Samples))
+		statistics.Samples[pos] = details
+	}
+	return statistics
+}
+
+func extractDatabase(engne storepb.Engine, defaultDB string, sql string) []string {
+	resources, err := base.ExtractResourceList(engne, defaultDB /* currentDatabase */, "" /* currentSchema */, sql)
+	if err != nil {
+		// If we can't extract the database, we just use the default database.
+		slog.Debug("extract database failed", log.BBError(err), slog.String("sql", sql))
+		return []string{defaultDB}
+	}
+	databaseMap := make(map[string]bool)
+	for _, resource := range resources {
+		databaseMap[resource.Database] = true
+	}
+	var databases []string
+	for database := range databaseMap {
+		databases = append(databases, database)
+	}
+	if len(databases) == 0 {
+		databases = append(databases, defaultDB)
+	}
+	return databases
+}
+
+// CheckSlowQueryLogEnabled checks whether the slow query log is enabled.
+func (driver *Driver) CheckSlowQueryLogEnabled(ctx context.Context) error {
+	showSlowQueryLog := "SHOW GLOBAL VARIABLES LIKE 'slow_query_log'"
+
+	slowQueryLogRows, err := driver.db.QueryContext(ctx, showSlowQueryLog)
+	if err != nil {
+		return util.FormatErrorWithQuery(err, showSlowQueryLog)
+	}
+	defer slowQueryLogRows.Close()
+	for slowQueryLogRows.Next() {
+		var name, value string
+		if err := slowQueryLogRows.Scan(&name, &value); err != nil {
+			return err
+		}
+		if value != "ON" {
+			return errors.New("slow query log is not enabled: slow_query_log = " + value)
+		}
+	}
+	if err := slowQueryLogRows.Err(); err != nil {
+		return util.FormatErrorWithQuery(err, showSlowQueryLog)
+	}
+
+	showLogOutput := "SHOW GLOBAL VARIABLES LIKE 'log_output'"
+	logOutputRows, err := driver.db.QueryContext(ctx, showLogOutput)
+	if err != nil {
+		return util.FormatErrorWithQuery(err, showLogOutput)
+	}
+	defer logOutputRows.Close()
+	for logOutputRows.Next() {
+		var name, value string
+		if err := logOutputRows.Scan(&name, &value); err != nil {
+			return err
+		}
+		if !strings.Contains(value, "TABLE") {
+			return errors.New("slow query log is not contained in TABLE: log_output = " + value)
+		}
+	}
+	if err := logOutputRows.Err(); err != nil {
+		return util.FormatErrorWithQuery(err, showLogOutput)
+	}
+
+	return nil
+}
+
+func stripSingleQuote(s string) string {
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+		return s[1 : len(s)-1]
+	}
+	return s
+}

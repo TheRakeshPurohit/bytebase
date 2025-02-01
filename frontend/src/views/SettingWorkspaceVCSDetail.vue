@@ -1,350 +1,205 @@
 <template>
-  <div class="mt-4 space-y-4">
-    <div class="flex justify-end">
-      <div
-        v-if="vcs.type == 'GITLAB_SELF_HOST'"
-        class="flex flex-row items-center space-x-2"
-      >
-        <div class="textlabel whitespace-nowrap">
-          {{
-            $t(
-              "version-control.setting.add-git-provider.gitlab-self-host-ce-ee"
-            )
-          }}
-        </div>
-        <img class="h-6 w-auto" src="../assets/gitlab-logo.svg" />
-      </div>
-    </div>
+  <div class="flex flex-col gap-y-4">
+    <VCSProviderBasicInfoPanel :create="false" :config="state.config" />
 
-    <div>
-      <label for="instanceurl" class="textlabel">
-        {{ $t("common.instance") }} URL
-      </label>
-      <input
-        id="instanceurl"
-        name="instanceurl"
-        type="text"
-        class="textfield mt-1 w-full"
-        disabled="true"
-        :value="vcs.instanceUrl"
-      />
-    </div>
-
-    <div>
-      <label for="name" class="textlabel">
-        {{
-          $t("version-control.setting.add-git-provider.basic-info.display-name")
-        }}
-      </label>
-      <p class="mt-1 textinfolabel">
-        {{
-          $t(
-            "version-control.setting.add-git-provider.basic-info.display-name-label"
-          )
-        }}
-      </p>
-      <input
-        id="name"
-        v-model="state.name"
-        name="name"
-        type="text"
-        class="textfield mt-1 w-full"
-      />
-    </div>
-
-    <div>
-      <label for="applicationid" class="textlabel">
-        {{ $t("common.application") }} ID
-      </label>
-      <p class="mt-1 textinfolabel">
-        <template v-if="vcs.type == 'GITLAB_SELF_HOST'">
-          {{ $t("version-control.setting.git-provider.application-id-label") }}
-          <a :href="adminApplicationUrl" target="_blank" class="normal-link">{{
-            $t("version-control.setting.git-provider.view-in-gitlab")
-          }}</a>
-        </template>
-      </p>
-      <input
-        id="applicationid"
-        v-model="state.applicationId"
-        name="applicationid"
-        type="text"
-        class="textfield mt-1 w-full"
-      />
-    </div>
-
-    <div>
-      <label for="secret" class="textlabel"> Secret </label>
-      <p class="mt-1 textinfolabel">
-        <template v-if="vcs.type == 'GITLAB_SELF_HOST'">
-          {{ $t("version-control.setting.git-provider.secret-label-gitlab") }}
-        </template>
-      </p>
-      <input
-        id="secret"
-        v-model="state.secret"
-        name="secret"
-        type="text"
-        class="textfield mt-1 w-full"
-        :placeholder="$t('common.sensitive-placeholder')"
-      />
-    </div>
-
-    <div class="pt-4 flex border-t justify-between">
-      <template v-if="repositoryList.length == 0">
+    <div class="pt-4 mt-2 flex border-t justify-between">
+      <template v-if="connectorList.length == 0">
         <BBButtonConfirm
-          :style="'DELETE'"
-          :button-text="'Delete this Git provider'"
-          :ok-text="'Delete'"
-          :confirm-title="`Delete Git provider '${vcs.name}'?`"
+          :type="'DELETE'"
+          :button-text="$t('gitops.setting.git-provider.delete')"
+          :ok-text="$t('common.delete')"
+          :confirm-title="
+            $t('gitops.setting.git-provider.delete-confirm', {
+              name: vcs?.title,
+            })
+          "
+          :disabled="!hasDeleteVCSPermission"
           :require-confirm="true"
           @confirm="deleteVCS"
         />
       </template>
       <template v-else>
         <div class="mt-1 textinfolabel">
-          {{ $t("version-control.setting.git-provider.delete") }}
+          {{ $t("gitops.setting.git-provider.delete-forbidden") }}
         </div>
       </template>
-      <div>
-        <button
-          type="button"
-          class="btn-normal py-2 px-4"
+      <div class="space-x-3">
+        <NButton
+          v-if="allowUpdate"
+          :disabled="state.loading"
           @click.prevent="cancel"
         >
-          {{ $t("common.cancel") }}
-        </button>
-        <button
-          type="button"
-          class="btn-primary ml-3 inline-flex justify-center py-2 px-4"
+          {{ $t("common.discard-changes") }}
+        </NButton>
+        <NButton
+          type="primary"
           :disabled="!allowUpdate"
+          :loading="state.loading"
           @click.prevent="doUpdate"
         >
           {{ $t("common.update") }}
-        </button>
+        </NButton>
       </div>
     </div>
   </div>
 
-  <div class="py-6">
+  <div class="py-6 space-y-4">
     <div class="text-lg leading-6 font-medium text-main">
-      {{ $t("repository.linked") + ` (${repositoryList.length})` }}
+      {{ $t("repository.linked") + ` (${connectorList.length})` }}
     </div>
-    <div class="mt-4">
-      <RepositoryTable :repository-list="repositoryList" />
-    </div>
+    <VCSConnectorTable
+      v-if="hasListRepoPermission"
+      :connector-list="connectorList"
+    />
+    <NoPermissionPlaceholder v-else />
   </div>
 </template>
 
-<script lang="ts">
-import { reactive, computed, watchEffect, onMounted, onUnmounted } from "vue";
-import { useStore } from "vuex";
-import { useRouter } from "vue-router";
-import RepositoryTable from "../components/RepositoryTable.vue";
+<script lang="ts" setup>
 import isEmpty from "lodash-es/isEmpty";
-import { idFromSlug } from "../utils";
+import { NButton } from "naive-ui";
+import { reactive, computed, watchEffect } from "vue";
+import { useRouter } from "vue-router";
+import { BBButtonConfirm } from "@/bbkit";
+import { VCSProviderBasicInfoPanel } from "@/components/VCS";
+import VCSConnectorTable from "@/components/VCSConnectorTable.vue";
+import NoPermissionPlaceholder from "@/components/misc/NoPermissionPlaceholder.vue";
+import { WORKSPACE_ROUTE_GITOPS } from "@/router/dashboard/workspaceRoutes";
 import {
-  VCS,
-  VCSPatch,
-  openWindowForOAuth,
-  OAuthWindowEventPayload,
-  OAuthConfig,
-  redirectUrl,
-  OAuthToken,
-} from "../types";
+  pushNotification,
+  useVCSConnectorStore,
+  useVCSProviderStore,
+} from "@/store";
+import type { VCSConfig } from "@/types";
+import { VCSType } from "@/types/proto/v1/common";
+import type { VCSProvider } from "@/types/proto/v1/vcs_provider_service";
+import { hasWorkspacePermissionV2 } from "@/utils";
 
 interface LocalState {
-  name: string;
-  applicationId: string;
-  secret: string;
-  oAuthResultCallback?: (token: OAuthToken | undefined) => void;
+  config: VCSConfig;
+  loading: boolean;
 }
 
-export default {
-  name: "SettingWorkspaceVCSDetail",
-  components: { RepositoryTable },
-  props: {
-    vcsSlug: {
-      required: true,
-      type: String,
-    },
-  },
-  setup(props) {
-    const store = useStore();
-    const router = useRouter();
+const props = defineProps<{
+  vcsResourceId: string;
+}>();
 
-    const vcs = computed((): VCS => {
-      return store.getters["vcs/vcsById"](idFromSlug(props.vcsSlug));
+const router = useRouter();
+const vcsV1Store = useVCSProviderStore();
+const vcsConnectorStore = useVCSConnectorStore();
+
+const vcs = computed((): VCSProvider | undefined => {
+  return vcsV1Store.getVCSById(props.vcsResourceId);
+});
+
+const initState = computed(
+  (): VCSConfig => ({
+    type: vcs.value?.type ?? VCSType.GITLAB,
+    uiType: "GITLAB_SELF_HOST",
+    resourceId: props.vcsResourceId,
+    name: vcs.value?.title ?? "",
+    instanceUrl: vcs.value?.url ?? "",
+    accessToken: "",
+  })
+);
+
+const resetState = () => {
+  state.config = { ...initState.value };
+  state.loading = false;
+};
+
+const state = reactive<LocalState>({
+  config: { ...initState.value },
+  loading: false,
+});
+
+const hasUpdateVCSPermission = computed(() => {
+  return hasWorkspacePermissionV2("bb.vcsProviders.update");
+});
+
+const hasDeleteVCSPermission = computed(() => {
+  return hasWorkspacePermissionV2("bb.vcsProviders.delete");
+});
+
+const hasListRepoPermission = computed(() => {
+  return hasWorkspacePermissionV2("bb.vcsProviders.listProjects");
+});
+
+watchEffect(async () => {
+  await vcsV1Store.getOrFetchVCSList();
+  resetState();
+  if (vcs.value && hasListRepoPermission.value) {
+    await vcsConnectorStore.fetchConnectorsInProvider(vcs.value.name);
+  }
+});
+
+const connectorList = computed(() => {
+  return vcsConnectorStore.getConnectorsInProvider(vcs.value?.name ?? "");
+});
+
+const allowUpdate = computed(() => {
+  return (
+    (state.config.name != vcs.value?.title ||
+      !isEmpty(state.config.accessToken)) &&
+    hasUpdateVCSPermission.value
+  );
+});
+
+const doUpdate = async () => {
+  if (!vcs.value) {
+    return;
+  }
+  state.loading = true;
+
+  const vcsPatch: Partial<VCSProvider> = {
+    name: vcs.value.name,
+  };
+  if (state.config.name != vcs.value.title) {
+    vcsPatch.title = state.config.name;
+  }
+  if (!isEmpty(state.config.accessToken)) {
+    vcsPatch.accessToken = state.config.accessToken;
+  }
+
+  try {
+    const updatedVCS = await vcsV1Store.updateVCS(vcsPatch);
+    if (!updatedVCS) {
+      return;
+    }
+    resetState();
+    pushNotification({
+      module: "bytebase",
+      style: "SUCCESS",
+      title: `Successfully updated '${updatedVCS.title}'`,
     });
+  } finally {
+    state.loading = false;
+  }
+};
 
-    const state = reactive<LocalState>({
-      name: vcs.value.name,
-      applicationId: vcs.value.applicationId,
-      secret: "",
+const cancel = () => {
+  resetState();
+};
+
+const deleteVCS = async () => {
+  if (!vcs.value) {
+    return;
+  }
+  state.loading = true;
+
+  try {
+    const title = vcs.value.title;
+    await vcsV1Store.deleteVCS(vcs.value.name);
+    pushNotification({
+      module: "bytebase",
+      style: "SUCCESS",
+      title: `Successfully deleted '${title}'`,
     });
-
-    onMounted(() => {
-      window.addEventListener("bb.oauth.register-vcs", eventListener, false);
+    router.push({
+      name: WORKSPACE_ROUTE_GITOPS,
     });
-
-    onUnmounted(() => {
-      window.removeEventListener("bb.oauth.register-vcs", eventListener);
-    });
-
-    const eventListener = (event: Event) => {
-      const payload = (event as CustomEvent).detail as OAuthWindowEventPayload;
-      if (isEmpty(payload.error)) {
-        if (vcs.value.type == "GITLAB_SELF_HOST") {
-          const oAuthConfig: OAuthConfig = {
-            endpoint: `${vcs.value.instanceUrl}/oauth/token`,
-            applicationId: state.applicationId,
-            secret: state.secret,
-            redirectUrl: redirectUrl(),
-          };
-          store
-            .dispatch("gitlab/exchangeToken", {
-              oAuthConfig,
-              code: payload.code,
-            })
-            .then((token: OAuthToken) => {
-              state.oAuthResultCallback!(token);
-            })
-            .catch(() => {
-              state.oAuthResultCallback!(undefined);
-            });
-        }
-      } else {
-        state.oAuthResultCallback!(undefined);
-      }
-    };
-
-    const prepareRepositoryList = () => {
-      store.dispatch("repository/fetchRepositoryListByVCSId", vcs.value.id);
-    };
-
-    watchEffect(prepareRepositoryList);
-
-    const adminApplicationUrl = computed(() => {
-      if (vcs.value.type == "GITLAB_SELF_HOST") {
-        return `${vcs.value.instanceUrl}/admin/applications`;
-      }
-      return "";
-    });
-
-    const repositoryList = computed(() =>
-      store.getters["repository/repositoryListByVCSId"](vcs.value.id)
-    );
-
-    const allowUpdate = computed(() => {
-      return (
-        state.name != vcs.value.name ||
-        state.applicationId != vcs.value.applicationId ||
-        !isEmpty(state.secret)
-      );
-    });
-
-    const doUpdate = () => {
-      if (
-        state.applicationId != vcs.value.applicationId ||
-        !isEmpty(state.secret)
-      ) {
-        const newWindow = openWindowForOAuth(
-          `${vcs.value.instanceUrl}/oauth/authorize`,
-          vcs.value.applicationId,
-          "bb.oauth.register-vcs"
-        );
-        if (newWindow) {
-          state.oAuthResultCallback = (token: OAuthToken | undefined) => {
-            if (token) {
-              const vcsPatch: VCSPatch = {};
-              if (state.name != vcs.value.name) {
-                vcsPatch.name = state.name;
-              }
-              if (state.applicationId != vcs.value.applicationId) {
-                vcsPatch.applicationId = state.applicationId;
-              }
-              if (!isEmpty(state.secret)) {
-                vcsPatch.secret = state.secret;
-              }
-              store
-                .dispatch("vcs/patchVCS", {
-                  vcsId: vcs.value.id,
-                  vcsPatch,
-                })
-                .then((vcs: VCS) => {
-                  store.dispatch("notification/pushNotification", {
-                    module: "bytebase",
-                    style: "SUCCESS",
-                    title: `Successfully updated '${vcs.name}'`,
-                  });
-                });
-            } else {
-              var description = "";
-              if (vcs.value.type == "GITLAB_SELF_HOST") {
-                // If application id mismatches, the OAuth workflow will stop early.
-                // So the only possibility to reach here is we have a matching application id, while
-                // we failed to exchange a token, and it's likely we are requesting with a wrong secret.
-                description =
-                  "Please make sure Secret matches the one from your GitLab instance Application.";
-              }
-              store.dispatch("notification/pushNotification", {
-                module: "bytebase",
-                style: "CRITICAL",
-                title: `Failed to update '${vcs.value.name}'`,
-                description: description,
-              });
-            }
-          };
-        }
-      } else if (state.name != vcs.value.name) {
-        const vcsPatch: VCSPatch = {
-          name: state.name,
-        };
-        store
-          .dispatch("vcs/patchVCS", {
-            vcsId: vcs.value.id,
-            vcsPatch,
-          })
-          .then((updatedVCS: VCS) => {
-            store.dispatch("notification/pushNotification", {
-              module: "bytebase",
-              style: "SUCCESS",
-              title: `Successfully updated '${updatedVCS.name}'`,
-            });
-          });
-      }
-    };
-
-    const cancel = () => {
-      router.push({
-        name: "setting.workspace.version-control",
-      });
-    };
-
-    const deleteVCS = () => {
-      const name = vcs.value.name;
-      store.dispatch("vcs/deleteVCSById", vcs.value.id).then(() => {
-        store.dispatch("notification/pushNotification", {
-          module: "bytebase",
-          style: "SUCCESS",
-          title: `Successfully deleted '${name}'`,
-        });
-        router.push({
-          name: "setting.workspace.version-control",
-        });
-      });
-    };
-
-    return {
-      state,
-      vcs,
-      repositoryList,
-      adminApplicationUrl,
-      allowUpdate,
-      doUpdate,
-      cancel,
-      deleteVCS,
-    };
-  },
+  } finally {
+    state.loading = false;
+  }
 };
 </script>

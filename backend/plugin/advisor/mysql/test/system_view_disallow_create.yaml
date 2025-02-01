@@ -1,0 +1,14 @@
+- statement: CREATE TABLE t(a int);
+  changeType: 0
+- statement: CREATE VIEW get_one AS SELECT 1;
+  changeType: 0
+  want:
+    - status: 2
+      code: 1601
+      title: system.view.disallow-create
+      content: View is forbidden, but "CREATE VIEW get_one AS SELECT 1;" creates
+      detail: ""
+      startposition:
+        line: 1
+        column: 0
+      endposition: null

@@ -1,0 +1,211 @@
+<template>
+  <NDataTable
+    size="small"
+    :row-key="rowKey"
+    :columns="columnList"
+    :data="taskRunList"
+  />
+
+  <Drawer v-model:show="taskRunDetailContext.show">
+    <DrawerContent
+      :title="$t('common.detail')"
+      style="width: calc(100vw - 14rem)"
+    >
+      <TaskRunDetail
+        v-if="taskRunDetailContext.taskRun"
+        :key="taskRunDetailContext.taskRun.name"
+        :task-run="taskRunDetailContext.taskRun"
+      />
+    </DrawerContent>
+  </Drawer>
+</template>
+
+<script lang="tsx" setup>
+import { computedAsync } from "@vueuse/core";
+import { last } from "lodash-es";
+import { NButton, type DataTableColumn, NDataTable } from "naive-ui";
+import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import type { BBGridRow } from "@/bbkit";
+import HumanizeDate from "@/components/misc/HumanizeDate.vue";
+import { Drawer, DrawerContent } from "@/components/v2";
+import { useSheetV1Store } from "@/store";
+import {
+  getDateForPbTimestamp,
+  getTimeForPbTimestamp,
+  type ComposedTaskRun,
+} from "@/types";
+import { Duration } from "@/types/proto/google/protobuf/duration";
+import { TaskRun_Status } from "@/types/proto/v1/rollout_service";
+import { humanizeDurationV1, sheetNameOfTaskV1 } from "@/utils";
+import { useIssueContext } from "../../logic";
+import TaskRunComment from "./TaskRunComment.vue";
+import TaskRunDetail from "./TaskRunDetail.vue";
+import DetailCell from "./TaskRunLogTable/DetailCell";
+import { convertTaskRunLogEntryToFlattenLogEntries } from "./TaskRunLogTable/common";
+import TaskRunStatusIcon from "./TaskRunStatusIcon.vue";
+
+defineOptions({
+  inheritAttrs: false,
+});
+
+export type TaskRunGridRow = BBGridRow<ComposedTaskRun>;
+
+defineProps<{
+  taskRunList: ComposedTaskRun[];
+}>();
+
+const { t } = useI18n();
+const { selectedTask } = useIssueContext();
+
+const sheet = computedAsync(async () => {
+  return useSheetV1Store().getOrFetchSheetByName(
+    sheetNameOfTaskV1(selectedTask.value),
+    "FULL"
+  );
+});
+
+const taskRunDetailContext = ref<{
+  show: boolean;
+  taskRun?: ComposedTaskRun;
+}>({
+  show: false,
+});
+
+const rowKey = (taskRun: ComposedTaskRun) => {
+  return taskRun.name;
+};
+
+const columnList = computed((): DataTableColumn<ComposedTaskRun>[] => {
+  return [
+    {
+      key: "status",
+      title: "",
+      width: 30,
+      render: (taskRun: ComposedTaskRun) => (
+        <TaskRunStatusIcon status={taskRun.status} />
+      ),
+    },
+    {
+      key: "comment",
+      title: t("task.comment"),
+      width: "60%",
+      className: "",
+      minWidth: 140,
+      resizable: true,
+      render: (taskRun: ComposedTaskRun) => (
+        <div class="flex flex-row justify-start items-center">
+          <TaskRunComment taskRun={taskRun} />
+        </div>
+      ),
+    },
+    {
+      key: "detail",
+      title: () => t("common.detail"),
+      width: "20%",
+      className: "",
+      minWidth: 100,
+      resizable: true,
+      render: (taskRun) => {
+        const entry = getFlattenLogEntry(taskRun);
+        return entry ? (
+          <div class="flex flex-row justify-start items-center">
+            <DetailCell entry={entry} sheet={sheet.value} />
+          </div>
+        ) : (
+          "-"
+        );
+      },
+    },
+    {
+      key: "createTime",
+      title: t("task.created"),
+      width: 100,
+      render: (taskRun: ComposedTaskRun) => (
+        <HumanizeDate date={getDateForPbTimestamp(taskRun.createTime)} />
+      ),
+    },
+    {
+      key: "startTime",
+      title: t("task.started"),
+      width: 100,
+      render: (taskRun: ComposedTaskRun) => (
+        <HumanizeDate date={getDateForPbTimestamp(taskRun.startTime)} />
+      ),
+    },
+    {
+      key: "executionDuration",
+      title: t("task.execution-time"),
+      width: 120,
+      render: (taskRun: ComposedTaskRun) => {
+        return humanizeDurationV1(executionDurationOfTaskRun(taskRun));
+      },
+    },
+    {
+      key: "actions",
+      title: "",
+      width: 60,
+      render: (taskRun: ComposedTaskRun) => (
+        <NButton
+          v-if={shouldShowDetailButton(taskRun)}
+          size="tiny"
+          onClick={() => showDetail(taskRun)}
+        >
+          {t("common.detail")}
+        </NButton>
+      ),
+    },
+  ];
+});
+
+const executionDurationOfTaskRun = (
+  taskRun: ComposedTaskRun
+): Duration | undefined => {
+  const { startTime, updateTime } = taskRun;
+  if (!startTime || !updateTime) {
+    return undefined;
+  }
+  if (startTime.seconds.isZero()) {
+    return undefined;
+  }
+  if (taskRun.status === TaskRun_Status.RUNNING) {
+    const elapsedMS = Date.now() - getTimeForPbTimestamp(startTime);
+    return Duration.fromPartial({
+      seconds: Math.floor(elapsedMS / 1000),
+      nanos: (elapsedMS % 1000) * 1e6,
+    });
+  }
+  const startMS = getTimeForPbTimestamp(startTime);
+  const updateMS = getTimeForPbTimestamp(updateTime);
+  const elapsedMS = updateMS - startMS;
+  return Duration.fromPartial({
+    seconds: Math.floor(elapsedMS / 1000),
+    nanos: (elapsedMS % 1000) * 1e6,
+  });
+};
+
+const shouldShowDetailButton = (taskRun: ComposedTaskRun) => {
+  return [
+    TaskRun_Status.RUNNING,
+    TaskRun_Status.DONE,
+    TaskRun_Status.FAILED,
+    TaskRun_Status.CANCELED,
+  ].includes(taskRun.status);
+};
+
+const showDetail = (taskRun: ComposedTaskRun) => {
+  taskRunDetailContext.value = {
+    show: true,
+    taskRun,
+  };
+};
+
+const getFlattenLogEntry = (taskRun: ComposedTaskRun) => {
+  const entry = last(taskRun.taskRunLog.entries);
+  if (!entry) {
+    return undefined;
+  }
+  const flattenEntry = convertTaskRunLogEntryToFlattenLogEntries(entry, 0);
+  return last(flattenEntry);
+};
+</script>

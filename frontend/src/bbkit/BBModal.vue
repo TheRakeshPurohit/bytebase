@@ -1,112 +1,170 @@
 <template>
-  <teleport to="#bb-modal-stack">
+  <NModal
+    :show="show"
+    :auto-focus="false"
+    :trap-focus="trapFocus"
+    :close-on-esc="false"
+    :mask-closeable="maskClosable"
+    @mask-click="maskClosable && upmost && tryClose()"
+  >
     <div
+      v-bind="$attrs"
       class="bb-modal"
-      :style="style"
-      :data-bb-modal-id="id"
-      :data-bb-modal-index="index"
-      :data-bb-modal-active="active"
+      :data-overlay-stack-id="id"
+      :data-overlay-stack-upmost="upmost"
     >
-      <div class="relative -mt-4 -ml-4 flex items-center justify-between">
-        <div class="ml-4 text-xl text-main">
-          {{ title }}
-          <div v-if="subtitle" class="text-sm text-control whitespace-nowrap">
-            <span class="inline-block">
-              {{ subtitle }}
-            </span>
-          </div>
+      <div class="modal-header" :class="headerClass">
+        <div class="text-lg text-main mr-2 flex-1 overflow-hidden">
+          <slot name="title"><component :is="renderTitle" /></slot>
+          <slot name="subtitle"><component :is="renderSubtitle" /></slot>
         </div>
-        <button
+        <NButton
           v-if="showClose"
-          class="text-control-light"
+          quaternary
+          size="small"
           aria-label="close"
-          @click.prevent="close"
+          @click.prevent="tryClose()"
         >
           <span class="sr-only">Close</span>
-          <!-- Heroicons name: x -->
-          <heroicons-solid:x class="w-6 h-6" />
-        </button>
+          <XIcon class="w-5 h-auto hover:opacity-80" />
+        </NButton>
       </div>
-      <div class="modal-container">
+
+      <div class="modal-container" :class="containerClass">
         <slot />
       </div>
     </div>
-  </teleport>
+  </NModal>
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onMounted, onUnmounted } from "vue";
-import { useModalStack } from "./BBModalStack.vue";
+import { XIcon } from "lucide-vue-next";
+import { NButton, NModal } from "naive-ui";
+import type { PropType, RenderFunction } from "vue";
+import { defineComponent, h } from "vue";
+import { toRef } from "vue";
+import { useOverlayStack } from "@/components/misc/OverlayStackManager.vue";
+import { useEmitteryEventListener } from "@/composables/useEmitteryEventListener";
+import type { VueClass } from "@/utils";
 
 export default defineComponent({
-  name: "BBModal",
+  name: "BBModalV2",
+  components: {
+    NModal,
+    NButton,
+    XIcon,
+  },
+  inheritAttrs: false,
   props: {
+    show: {
+      type: Boolean,
+      default: true,
+    },
     title: {
-      required: true,
-      type: String,
+      default: "",
+      type: [String, Function] as PropType<string | RenderFunction>,
     },
     subtitle: {
       default: "",
-      type: String,
+      type: [String, Function] as PropType<string | RenderFunction>,
     },
     showClose: {
       type: Boolean,
       default: true,
     },
+    headerClass: {
+      type: [String, Object, Array] as PropType<VueClass>,
+      default: undefined,
+    },
+    containerClass: {
+      type: [String, Object, Array] as PropType<VueClass>,
+      default: undefined,
+    },
+    closeOnEsc: {
+      type: Boolean,
+      default: true,
+    },
+    maskClosable: {
+      type: Boolean,
+      // Default to `false` to make it behaves consistent with legacy BBModal
+      default: false,
+    },
+    beforeClose: {
+      type: Function as PropType<() => Promise<boolean>>,
+      default: undefined,
+    },
+    trapFocus: {
+      type: Boolean,
+      default: undefined,
+    },
   },
-  emits: ["close"],
+  emits: ["close", "update:show"],
   setup(props, { emit }) {
-    const { stack, id, index, active } = useModalStack();
+    const { id, upmost, events } = useOverlayStack(toRef(props, "show"));
 
-    const style = computed(() => ({
-      "z-index": 40 + index.value, // "40 + " because the container in BBModalStack is z-40
-    }));
+    useEmitteryEventListener(events, "esc", () => {
+      if (upmost.value && props.closeOnEsc) {
+        tryClose();
+      }
+    });
 
-    const close = () => {
+    const tryClose = async () => {
+      const { beforeClose } = props;
+      if (beforeClose) {
+        const pass = await beforeClose();
+        if (!pass) return;
+      }
       emit("close");
+      emit("update:show", false);
     };
 
-    const escHandler = (e: KeyboardEvent) => {
-      if (!active.value) {
-        // only to close the topmost modal when pressing ESC
-        return;
+    const renderTitle = () => {
+      if (typeof props.title === "function") {
+        return props.title();
       }
-      if (e.code == "Escape") {
-        close();
-      }
+      return props.title;
     };
 
-    onMounted(() => {
-      document.addEventListener("keydown", escHandler);
-    });
-
-    onUnmounted(() => {
-      document.removeEventListener("keydown", escHandler);
-    });
+    const renderSubtitle = () => {
+      if (typeof props.subtitle === "function") {
+        return props.subtitle();
+      }
+      if (props.subtitle) {
+        return h(
+          "div",
+          {
+            class: "text-sm text-control whitespace-nowrap",
+          },
+          [h("span", { class: "inline-block" }, props.subtitle)]
+        );
+      }
+      return null;
+    };
 
     return {
-      style,
-      close,
-      stack,
+      tryClose,
+      renderTitle,
+      renderSubtitle,
       id,
-      index,
-      active,
+      upmost,
     };
   },
 });
 </script>
 
-<style scoped>
+<style scoped lang="postcss">
 .bb-modal {
-  @apply absolute m-auto w-full max-w-max bg-white shadow-lg rounded-lg p-8 flex space-y-6 divide-y divide-block-border pointer-events-auto;
-  @apply flex-col;
+  @apply bg-white shadow-lg rounded-md py-3 flex pointer-events-auto flex-col gap-3;
 
+  max-width: calc(100vw - 80px);
   max-height: calc(100vh - 80px);
 }
 
-.modal-container {
-  @apply px-0.5 pt-4 max-h-screen overflow-auto w-full;
+.modal-header {
+  @apply relative mx-4 pb-2 flex items-center justify-between border-b border-block-border;
+}
 
-  margin-top: 0.5rem !important;
+.modal-container {
+  @apply px-4 max-h-screen overflow-auto w-full h-full;
 }
 </style>

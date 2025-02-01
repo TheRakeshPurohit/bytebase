@@ -1,14 +1,15 @@
 <template>
   <div class="mx-auto w-full max-w-sm">
     <div>
-      <img
-        class="h-12 w-auto"
-        src="../../assets/logo-full.svg"
-        alt="Bytebase"
-      />
-      <h2 class="mt-6 text-3xl leading-9 font-extrabold text-main">
-        <template v-if="needAdminSetup" class="text-accent font-semnibold">
-          <i18n-t keypath="auth.sign-up.admin-title" tag="p">
+      <BytebaseLogo class="mx-auto mb-8" />
+
+      <h2 class="text-2xl leading-9 font-medium text-main">
+        <template v-if="needAdminSetup">
+          <i18n-t
+            keypath="auth.sign-up.admin-title"
+            tag="p"
+            class="text-accent font-semnibold text-center"
+          >
             <template #account>
               <span class="text-accent font-semnibold">{{
                 $t("auth.sign-up.admin-account")
@@ -31,67 +32,23 @@
               {{ $t("common.email") }} <span class="text-red-600">*</span>
             </label>
             <div class="mt-1 rounded-md shadow-sm">
-              <input
-                id="email"
-                v-model="state.email"
-                type="email"
+              <BBTextField
+                v-model:value="state.email"
                 required
                 placeholder="jim@example.com"
-                class="appearance-none block w-full px-3 py-2 border border-control-border rounded-md placeholder-control-placeholder focus:outline-none focus:shadow-outline-blue focus:border-control-border sm:text-sm sm:leading-5"
+                :input-props="{ id: 'email' }"
                 @input="onTextEmail"
               />
             </div>
           </div>
 
-          <div>
-            <label
-              for="password"
-              class="block text-sm font-medium leading-5 text-control"
-            >
-              {{ $t("common.password") }}
-              <span class="text-red-600">*</span>
-            </label>
-            <div class="mt-1 rounded-md shadow-sm">
-              <input
-                id="password"
-                type="password"
-                autocomplete="off"
-                :value="state.password"
-                required
-                class="appearance-none block w-full px-3 py-2 border border-control-border rounded-md placeholder-control-placeholder focus:outline-none focus:shadow-outline-blue focus:border-control-border sm:text-sm sm:leading-5"
-                @input="changePassword($event.target.value)"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label
-              for="password-confirm"
-              class="block text-sm font-medium leading-5 text-control"
-            >
-              {{ $t("auth.sign-up.confirm-password") }}
-              <span class="text-red-600"
-                >*
-                {{
-                  state.showPasswordMismatchError
-                    ? $t("auth.sign-up.password-mismatch")
-                    : ""
-                }}</span
-              >
-            </label>
-            <div class="mt-1 rounded-md shadow-sm">
-              <input
-                id="password-confirm"
-                type="password"
-                autocomplete="off"
-                :placeholder="$t('auth.sign-up.confirm-password-placeholder')"
-                :value="state.passwordConfirm"
-                required
-                class="appearance-none block w-full px-3 py-2 border border-control-border rounded-md placeholder-control-placeholder focus:outline-none focus:shadow-outline-blue focus:border-control-border sm:text-sm sm:leading-5"
-                @input="changePasswordConfirm($event.target.value)"
-              />
-            </div>
-          </div>
+          <UserPassword
+            ref="userPasswordRef"
+            v-model:password="state.password"
+            v-model:password-confirm="state.passwordConfirm"
+            :show-learn-more="false"
+            :password-restriction="passwordRestriction"
+          />
 
           <div>
             <label
@@ -99,33 +56,67 @@
               class="block text-sm font-medium leading-5 text-control"
             >
               {{ $t("common.username") }}
+              <span class="text-red-600"> * </span>
             </label>
             <div class="mt-1 rounded-md shadow-sm">
-              <input
+              <BBTextField
                 id="name"
-                v-model="state.name"
-                type="text"
+                v-model:value="state.name"
+                required
                 placeholder="Jim Gray"
-                class="appearance-none block w-full px-3 py-2 border border-control-border rounded-md placeholder-control-placeholder focus:outline-none focus:shadow-outline-blue focus:border-control-border sm:text-sm sm:leading-5"
                 @input="onTextName"
               />
             </div>
           </div>
 
-          <div>
-            <span class="block w-full rounded-md shadow-sm">
-              <button
-                type="submit"
-                :disabled="!allowSignup"
-                class="btn-primary w-full flex justify-center py-2 px-4"
-              >
-                {{
-                  needAdminSetup
-                    ? $t("auth.sign-up.create-admin-account")
-                    : $t("common.sign-up")
-                }}
-              </button>
-            </span>
+          <div
+            v-if="needAdminSetup"
+            class="w-full flex flex-row justify-start items-start"
+          >
+            <NCheckbox
+              v-model:checked="state.acceptTermsAndPolicy"
+              class="mt-0.5"
+            />
+            <i18n-t
+              tag="span"
+              keypath="auth.sign-up.accept-terms-and-policy"
+              class="ml-1 select-none"
+              @click="
+                () => (state.acceptTermsAndPolicy = !state.acceptTermsAndPolicy)
+              "
+            >
+              <template #terms>
+                <a
+                  href="https://www.bytebase.com/terms?source=console"
+                  class="text-accent"
+                  >{{ $t("auth.sign-up.terms-of-service") }}</a
+                >
+              </template>
+              <template #policy>
+                <a
+                  href="https://www.bytebase.com/privacy?source=console"
+                  class="text-accent"
+                  >{{ $t("auth.sign-up.privacy-policy") }}</a
+                >
+              </template>
+            </i18n-t>
+          </div>
+
+          <div class="w-full">
+            <NButton
+              attr-type="submit"
+              type="primary"
+              size="large"
+              :disabled="!allowSignup"
+              :loading="state.isLoading"
+              style="width: 100%"
+            >
+              {{
+                needAdminSetup
+                  ? $t("auth.sign-up.create-admin-account")
+                  : $t("common.sign-up")
+              }}
+            </NButton>
           </div>
         </form>
       </div>
@@ -139,7 +130,10 @@
         <span class="pl-2 bg-white text-control">
           {{ $t("auth.sign-up.existing-user") }}
         </span>
-        <router-link to="/auth/signin" class="accent-link px-2 bg-white">
+        <router-link
+          :to="{ name: AUTH_SIGNIN_MODULE, query: $route.query }"
+          class="accent-link px-2 bg-white"
+        >
           {{ $t("common.sign-in") }}
         </router-link>
       </div>
@@ -149,151 +143,122 @@
   <AuthFooter />
 </template>
 
-<script lang="ts">
-import { computed, onUnmounted, reactive } from "vue";
-import { useStore } from "vuex";
+<script lang="ts" setup>
+import { NButton, NCheckbox } from "naive-ui";
+import { storeToRefs } from "pinia";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { SignupInfo, TEXT_VALIDATION_DELAY } from "../../types";
-import { isValidEmail } from "../../utils";
+import { BBTextField } from "@/bbkit";
+import BytebaseLogo from "@/components/BytebaseLogo.vue";
+import UserPassword from "@/components/User/Settings/UserPassword.vue";
+import { AUTH_SIGNIN_MODULE } from "@/router/auth";
+import { SETUP_WORKSPACE_MODE_MODULE } from "@/router/setup";
+import {
+  useActuatorV1Store,
+  useAuthStore,
+  useOnboardingStateStore,
+} from "@/store";
+import type { User } from "@/types/proto/v1/auth_service";
+import { isValidEmail } from "@/utils";
 import AuthFooter from "./AuthFooter.vue";
 
 interface LocalState {
   email: string;
   password: string;
   passwordConfirm: string;
-  passwordValidationTimer?: ReturnType<typeof setTimeout>;
-  showPasswordMismatchError: boolean;
   name: string;
   nameManuallyEdited: boolean;
+  acceptTermsAndPolicy: boolean;
+  isLoading: boolean;
 }
 
-export default {
-  name: "SignupPage",
-  components: { AuthFooter },
-  setup() {
-    const store = useStore();
-    const router = useRouter();
+const actuatorStore = useActuatorV1Store();
+const router = useRouter();
+const userPasswordRef = ref<InstanceType<typeof UserPassword>>();
 
-    const state = reactive<LocalState>({
-      email: "",
-      password: "",
-      passwordConfirm: "",
-      showPasswordMismatchError: false,
-      name: "",
-      nameManuallyEdited: false,
-    });
+const state = reactive<LocalState>({
+  email: "",
+  password: "",
+  passwordConfirm: "",
+  name: "",
+  nameManuallyEdited: false,
+  acceptTermsAndPolicy: true,
+  isLoading: false,
+});
 
-    onUnmounted(() => {
-      if (state.passwordValidationTimer) {
-        clearInterval(state.passwordValidationTimer);
-      }
-    });
+const { needAdminSetup, disallowSignup, passwordRestriction } =
+  storeToRefs(actuatorStore);
 
-    const needAdminSetup = computed(() => {
-      return store.getters["actuator/needAdminSetup"]();
-    });
+const allowSignup = computed(() => {
+  return (
+    isValidEmail(state.email) &&
+    state.password &&
+    !userPasswordRef.value?.passwordHint &&
+    !userPasswordRef.value?.passwordMismatch &&
+    state.acceptTermsAndPolicy &&
+    !disallowSignup.value
+  );
+});
 
-    const allowSignup = computed(() => {
-      return (
-        isValidEmail(state.email) &&
-        state.password &&
-        !state.showPasswordMismatchError
-      );
-    });
+onMounted(() => {
+  if (needAdminSetup.value) {
+    state.acceptTermsAndPolicy = false;
+  }
+});
 
-    const passwordMatch = computed(() => {
-      return state.password == state.passwordConfirm;
-    });
-
-    const refreshPasswordValidation = () => {
-      if (state.passwordValidationTimer) {
-        clearInterval(state.passwordValidationTimer);
-      }
-
-      if (passwordMatch.value) {
-        state.showPasswordMismatchError = false;
-      } else {
-        state.passwordValidationTimer = setTimeout(() => {
-          // If error is already displayed, we hide the error only if there is valid input.
-          // Otherwise, we hide the error if input is either empty or valid.
-          if (state.showPasswordMismatchError) {
-            state.showPasswordMismatchError = !passwordMatch.value;
-          } else {
-            state.showPasswordMismatchError =
-              state.password != "" &&
-              state.passwordConfirm != "" &&
-              !passwordMatch.value;
-          }
-        }, TEXT_VALIDATION_DELAY);
-      }
-    };
-
-    const changePassword = (value: string) => {
-      state.password = value;
-      refreshPasswordValidation();
-    };
-
-    const changePasswordConfirm = (value: string) => {
-      state.passwordConfirm = value;
-      refreshPasswordValidation();
-    };
-
-    const onTextEmail = () => {
-      const email = state.email.trim();
-      if (!state.nameManuallyEdited) {
-        const emailParts = email.split("@");
-        if (emailParts.length > 0) {
-          if (emailParts[0].length > 0) {
-            const name = emailParts[0].replace("_", ".");
-            const nameParts = name.split(".");
-            if (nameParts.length >= 2) {
-              state.name = [
-                nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1),
-                nameParts[1].charAt(0).toUpperCase() + nameParts[1].slice(1),
-              ].join(" ");
-            } else {
-              state.name = name.charAt(0).toUpperCase() + name.slice(1);
-            }
-          }
+const onTextEmail = () => {
+  const email = state.email.trim().toLowerCase();
+  state.email = email;
+  if (!state.nameManuallyEdited) {
+    const emailParts = email.split("@");
+    if (emailParts.length > 0) {
+      if (emailParts[0].length > 0) {
+        const name = emailParts[0].replace("_", ".");
+        const nameParts = name.split(".");
+        if (nameParts.length >= 2) {
+          state.name = [
+            nameParts[0].charAt(0).toUpperCase() + nameParts[0].slice(1),
+            nameParts[1].charAt(0).toUpperCase() + nameParts[1].slice(1),
+          ].join(" ");
+        } else {
+          state.name = name.charAt(0).toUpperCase() + name.slice(1);
         }
       }
-    };
+    }
+  }
+};
 
-    const onTextName = () => {
-      const name = state.name.trim();
-      state.nameManuallyEdited = name.length > 0;
-    };
+const onTextName = () => {
+  const name = state.name.trim();
+  state.nameManuallyEdited = name.length > 0;
+};
 
-    const trySignup = () => {
-      if (!passwordMatch.value) {
-        state.showPasswordMismatchError = true;
-      } else {
-        const signupInfo: SignupInfo = {
-          email: state.email,
-          password: state.password,
-          name: state.name,
-        };
-        store.dispatch("auth/signup", signupInfo).then(async () => {
-          // we need to update the server info after setting up the first admin account so that the splash screen
-          // won't display the UI for registering the first admin account again.
-          if (needAdminSetup.value) {
-            await store.dispatch("actuator/fetchInfo");
-          }
-          router.push("/");
-        });
-      }
-    };
+const trySignup = async () => {
+  if (state.isLoading) return;
+  state.isLoading = true;
 
-    return {
-      state,
-      needAdminSetup,
-      allowSignup,
-      changePassword,
-      changePasswordConfirm,
-      onTextEmail,
-      onTextName,
-      trySignup,
+  try {
+    const signupInfo: Partial<User> = {
+      email: state.email,
+      password: state.password,
+      name: state.name,
     };
-  },
+    await useAuthStore().signup(signupInfo);
+    if (needAdminSetup.value) {
+      await actuatorStore.fetchServerInfo();
+      // When the first time we created an end user, the server-side will
+      // generate onboarding data.
+      // We write a flag here to indicate that the workspace is just created
+      // and we can consume this flag somewhere else if needed.
+      useOnboardingStateStore().initialize();
+      router.replace({
+        name: SETUP_WORKSPACE_MODE_MODULE,
+      });
+    } else {
+      router.replace("/");
+    }
+  } finally {
+    state.isLoading = false;
+  }
 };
 </script>

@@ -1,4 +1,3 @@
-import type { App } from "vue";
 import {
   create,
   NAlert,
@@ -15,6 +14,8 @@ import {
   NPopover,
   NPopselect,
   NPopconfirm,
+  NRadio,
+  NRadioGroup,
   NSpace,
   NTab,
   NTabs,
@@ -22,9 +23,11 @@ import {
   NTag,
   NTooltip,
   NTree,
+  NSelect,
   NUpload,
   NUploadDragger,
 } from "naive-ui";
+import type { App } from "vue";
 
 const naive = create({
   components: [
@@ -42,6 +45,8 @@ const naive = create({
     NPopover,
     NPopselect,
     NPopconfirm,
+    NRadio,
+    NRadioGroup,
     NSpace,
     NTab,
     NTabs,
@@ -49,11 +54,22 @@ const naive = create({
     NTag,
     NTooltip,
     NTree,
+    NSelect,
     NUpload,
     NUploadDragger,
   ],
 });
 
-const install = (app: App) => app.use(naive);
+const install = (app: App) => {
+  app.use(naive);
+  reAppendMetaTag("naive-ui-style");
+  reAppendMetaTag("vueuc-style");
+};
 
 export default install;
+
+const reAppendMetaTag = (name: string) => {
+  const meta = document.createElement("meta");
+  meta.name = name;
+  document.head.appendChild(meta);
+};

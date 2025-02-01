@@ -1,20 +1,29 @@
+<!-- eslint-disable vue/no-mutating-props -->
 <template>
   <div class="space-y-4">
     <div>
+      <div v-if="!create && getWebhookLink !== ''" class="mb-2">
+        <label class="textlabel mt-2">
+          <i18n-t keypath="repository.our-webhook-link">
+            <template #webhookLink>
+              <a class="normal-link" :href="getWebhookLink" target="_blank">
+                {{ getWebhookLink }}
+              </a>
+            </template>
+          </i18n-t>
+        </label>
+      </div>
       <div class="flex flex-row space-x-2 items-center">
         <label for="gitprovider" class="textlabel">
           {{ $t("repository.git-provider") }}
         </label>
-        <template v-if="vcsType.startsWith('GITLAB')">
-          <img class="h-4 w-auto" src="../assets/gitlab-logo.svg" />
-        </template>
+        <VCSIcon :type="vcsType" />
       </div>
-      <input
+      <BBTextField
         id="gitprovider"
         name="gitprovider"
-        type="text"
-        class="textfield mt-1 w-full"
-        disabled="true"
+        class="mt-2 w-full"
+        :disabled="true"
         :value="vcsName"
       />
     </div>
@@ -23,304 +32,184 @@
         <label for="repository" class="textlabel">
           {{ $t("common.repository") }}
         </label>
-        <div
-          v-if="!create && allowEdit"
-          class="ml-1 normal-link text-sm"
-          @click.prevent="$emit('change-repository')"
-        >
-          {{ $t("common.change") }}
-        </div>
       </div>
-      <input
+      <BBTextField
         id="repository"
         name="repository"
-        type="text"
-        class="textfield mt-1 w-full"
-        disabled="true"
+        class="mt-2 w-full"
+        :disabled="true"
         :value="repositoryInfo.fullPath"
+      />
+      <ResourceIdField
+        v-model:value="repositoryConfig.resourceId"
+        class="max-w-full flex-nowrap mt-1.5"
+        editing-class="mt-4"
+        resource-type="vcs-connector"
+        :resource-title="repositoryInfo.title"
+        :validate="validateResourceId"
+        :readonly="!create || !allowEdit"
+      />
+    </div>
+    <div>
+      <div class="textlabel flex items-center gap-x-1">
+        {{ $t("database-group.self") }}
+        <FeatureBadge :feature="'bb.feature.database-grouping'" />
+      </div>
+      <div class="mt-1 textinfolabel">
+        {{ $t("repository.database-group-description") }}
+        <span
+          v-if="hasDatabaseGroupPermission"
+          class="cursor-pointer normal-link"
+          @click="showDatabaseGroupPanel = true"
+        >
+          {{ $t("database-group.create") }}
+        </span>
+      </div>
+      <DatabaseGroupSelect
+        :selected="repositoryConfig.databaseGroup"
+        class="mt-2"
+        style="width: 100%"
+        :project="project.name"
+        :clearable="true"
+        :select-first-as-default="false"
+        @update:selected="(val) => (repositoryConfig.databaseGroup = val ?? '')"
       />
     </div>
     <div>
       <div class="textlabel">
-        {{ $t("common.branch") }} <span class="text-red-600">*</span>
+        {{ $t("common.branch") }}
       </div>
       <div class="mt-1 textinfolabel">
         {{ $t("repository.branch-observe-file-change") }}
       </div>
-      <input
+      <BBTextField
         id="branch"
-        v-model="repositoryConfig.branchFilter"
+        v-model:value="repositoryConfig.branch"
         name="branch"
-        type="text"
-        class="textfield mt-2 w-full"
-        placeholder="e.g. master"
+        class="mt-2 w-full"
+        placeholder="e.g. main"
         :disabled="!allowEdit"
+        :required="true"
       />
-      <div v-if="vcsType == 'GITLAB_SELF_HOST'" class="mt-2 textinfolabel">
-        {{ $t("repository.branch-specify-tip") }}
-      </div>
     </div>
     <div>
       <div class="textlabel">{{ $t("repository.base-directory") }}</div>
       <div class="mt-1 textinfolabel">
         {{ $t("repository.base-directory-description") }}
       </div>
-      <input
+      <BBTextField
         id="basedirectory"
-        v-model="repositoryConfig.baseDirectory"
+        v-model:value="repositoryConfig.baseDirectory"
         name="basedirectory"
-        type="text"
-        class="textfield mt-2 w-full"
+        class="mt-2 w-full"
         :disabled="!allowEdit"
       />
-    </div>
-    <div>
-      <div class="textlabel">
-        {{ $t("repository.file-path-template") }}
-        <span class="text-red-600">*</span>
-        <a
-          href="https://docs.bytebase.com/use-bytebase/vcs-integration/organize-repository-files#file-path-template"
-          target="__blank"
-          class="font-normal normal-link"
-        >
-          {{ $t("common.config-guide") }}</a
-        >
-      </div>
-      <div class="mt-1 textinfolabel">
-        {{ $t("repository.file-path-template-description") }}
-      </div>
-      <input
-        id="filepathtemplate"
-        v-model="repositoryConfig.filePathTemplate"
-        name="filepathtemplate"
-        type="text"
-        class="textfield mt-2 w-full"
-        :disabled="!allowEdit"
-      />
-      <div class="mt-2 textinfolabel capitalize">
-        <span class="text-red-600">*</span>
-        {{ $t("common.required-placeholder") }}:
-        {{ FILE_REQUIRED_PLACEHOLDER }};
-        <template v-if="fileOptionalPlaceholder.length > 0">
-          {{ $t("common.optional-placeholder") }}:
-          {{ fileOptionalPlaceholder.join(", ") }}
-        </template>
-      </div>
-      <div class="mt-2 textinfolabel">
-        • {{ $t("repository.file-path-example-normal-migration") }}:
-        {{
-          sampleFilePath(
-            repositoryConfig.baseDirectory,
-            repositoryConfig.filePathTemplate,
-            "migrate"
-          )
-        }}
-      </div>
-      <div class="mt-2 textinfolabel">
-        • {{ $t("repository.file-path-example-baseline-migration") }}:
-        {{
-          sampleFilePath(
-            repositoryConfig.baseDirectory,
-            repositoryConfig.filePathTemplate,
-            "baseline"
-          )
-        }}
-      </div>
-    </div>
-    <div>
-      <div class="textlabel">
-        {{ $t("repository.schema-path-template") }}
-        <a
-          href="https://docs.bytebase.com/use-bytebase/vcs-integration/organize-repository-files#schema-path-template"
-          target="__blank"
-          class="font-normal normal-link"
-        >
-          {{ $t("common.config-guide") }}</a
-        >
-      </div>
-      <div class="mt-1 textinfolabel">
-        {{ $t("repository.schema-writeback-description") }}
-        <span class="font-medium text-main">{{
-          $t("repository.schema-writeback-protected-branch")
-        }}</span>
-      </div>
-      <input
-        id="schemapathtemplate"
-        v-model="repositoryConfig.schemaPathTemplate"
-        name="schemapathtemplate"
-        type="text"
-        class="textfield mt-2 w-full"
-        :disabled="!allowEdit"
-      />
-      <div class="mt-2 textinfolabel">
-        <span class="text-red-600">*</span> {{ $t("repository.if-specified") }},
-        {{ $t("common.required-placeholder") }}:
-        {{ SCHEMA_REQUIRED_PLACEHOLDER }};
-        <template v-if="schemaOptionalTagPlaceholder.length > 0">
-          {{ $t("common.optional-placeholder") }}:
-          {{ schemaOptionalTagPlaceholder.join(", ") }}
-        </template>
-      </div>
-      <div
-        v-if="repositoryConfig.schemaPathTemplate"
-        class="mt-2 textinfolabel"
-      >
-        • {{ $t("repository.schema-path-example") }}:
-        {{
-          sampleSchemaPath(
-            repositoryConfig.baseDirectory,
-            repositoryConfig.schemaPathTemplate
-          )
-        }}
-      </div>
     </div>
   </div>
+
+  <DatabaseGroupPanel
+    :show="showDatabaseGroupPanel"
+    :project="project"
+    :redirect-to-detail-page="false"
+    @close="showDatabaseGroupPanel = false"
+  />
 </template>
 
-<script lang="ts">
-import { reactive, PropType, defineComponent, computed } from "vue";
-import {
-  ExternalRepositoryInfo,
-  Project,
+<script lang="ts" setup>
+import { Status } from "nice-grpc-common";
+import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { BBTextField } from "@/bbkit";
+import { DatabaseGroupSelect } from "@/components/v2/Select";
+import { useVCSConnectorStore, hasFeature } from "@/store";
+import type {
   RepositoryConfig,
-  VCSType,
-} from "../types";
+  ComposedProject,
+  ResourceId,
+  ValidatedMessage,
+} from "@/types";
+import { VCSType } from "@/types/proto/v1/common";
+import type { VCSRepository } from "@/types/proto/v1/vcs_provider_service";
+import { hasProjectPermissionV2 } from "@/utils";
+import { getErrorCode } from "@/utils/grpcweb";
+import DatabaseGroupPanel from "./DatabaseGroup/DatabaseGroupPanel.vue";
+import FeatureBadge from "./FeatureGuard/FeatureBadge.vue";
+import { VCSIcon } from "./VCS";
+import { ResourceIdField } from "./v2";
 
-const FILE_REQUIRED_PLACEHOLDER = "{{DB_NAME}}, {{VERSION}}, {{TYPE}}";
-const SCHEMA_REQUIRED_PLACEHOLDER = "{{DB_NAME}}";
+const props = withDefaults(
+  defineProps<{
+    allowEdit?: boolean;
+    create?: boolean;
+    vcsType: VCSType;
+    vcsName: string;
+    repositoryInfo: VCSRepository;
+    repositoryConfig: RepositoryConfig;
+    project: ComposedProject;
+  }>(),
+  {
+    allowEdit: true,
+    create: false,
+  }
+);
 
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
-interface LocalState {}
+const showDatabaseGroupPanel = ref<boolean>(false);
+const { t } = useI18n();
+const vcsConnectorStore = useVCSConnectorStore();
 
-export default defineComponent({
-  name: "RepositoryForm",
-  props: {
-    allowEdit: {
-      default: true,
-      type: Boolean,
-    },
-    create: {
-      type: Boolean,
-      default: false,
-    },
-    vcsType: {
-      required: true,
-      type: String as PropType<VCSType>,
-    },
-    vcsName: {
-      required: true,
-      type: String,
-    },
-    repositoryInfo: {
-      required: true,
-      type: Object as PropType<ExternalRepositoryInfo>,
-    },
-    repositoryConfig: {
-      required: true,
-      type: Object as PropType<RepositoryConfig>,
-    },
-    project: {
-      required: true,
-      type: Object as PropType<Project>,
-    },
-  },
-  emits: ["change-repository"],
-  setup(props) {
-    const state = reactive<LocalState>({});
+const hasDatabaseGroupPermission = computed(
+  () =>
+    hasFeature("bb.feature.database-grouping") &&
+    hasProjectPermissionV2(props.project, "bb.projects.update")
+);
 
-    const isTenantProject = computed(() => {
-      return props.project.tenantMode === "TENANT";
-    });
-
-    const sampleFilePath = (
-      baseDirectory: string,
-      filePathTemplate: string,
-      type: string
-    ): string => {
-      type Item = {
-        placeholder: string;
-        sampleText: string;
-      };
-
-      const placeholderList: Item[] = [
-        {
-          placeholder: "{{VERSION}}",
-          sampleText: "202101131000",
-        },
-        {
-          placeholder: "{{DB_NAME}}",
-          sampleText: "db1",
-        },
-        {
-          placeholder: "{{TYPE}}",
-          sampleText: type,
-        },
-        {
-          placeholder: "{{ENV_NAME}}",
-          sampleText: "env1",
-        },
-        {
-          placeholder: "{{DESCRIPTION}}",
-          sampleText: "create_tablefoo_for_bar",
-        },
-      ];
-
-      let result = `${baseDirectory}/${filePathTemplate}`;
-      for (const item of placeholderList) {
-        const re = new RegExp(item.placeholder, "g");
-        result = result.replace(re, item.sampleText);
+const getWebhookLink = computed(() => {
+  switch (props.vcsType) {
+    case VCSType.AZURE_DEVOPS: {
+      const parts = props.repositoryInfo.id.split("/");
+      if (parts.length !== 3) {
+        return "";
       }
-      return result;
-    };
-
-    const sampleSchemaPath = (
-      baseDirectory: string,
-      schemaPathTemplate: string
-    ): string => {
-      type Item = {
-        placeholder: string;
-        sampleText: string;
-      };
-
-      const placeholderList: Item[] = [
-        {
-          placeholder: "{{DB_NAME}}",
-          sampleText: "db1",
-        },
-      ];
-
-      let result = `${baseDirectory}/${schemaPathTemplate}`;
-      for (const item of placeholderList) {
-        const re = new RegExp(item.placeholder, "g");
-        result = result.replace(re, item.sampleText);
-      }
-      return result;
-    };
-
-    const fileOptionalPlaceholder = computed(() => {
-      const tags = [] as string[];
-      // Only allows {{ENV_NAME}} to be an optional placeholder for non-tenant mode projects
-      if (!isTenantProject.value) tags.push("{{ENV_NAME}}");
-      tags.push("{{DESCRIPTION}}");
-      return tags;
-    });
-
-    const schemaOptionalTagPlaceholder = computed(() => {
-      const tags = [] as string[];
-      // Only allows {{ENV_NAME}} to be an optional placeholder for non-tenant mode projects
-      if (!isTenantProject.value) tags.push("{{ENV_NAME}}");
-      return tags;
-    });
-
-    return {
-      FILE_REQUIRED_PLACEHOLDER,
-      fileOptionalPlaceholder,
-      SCHEMA_REQUIRED_PLACEHOLDER,
-      schemaOptionalTagPlaceholder,
-      state,
-      sampleFilePath,
-      sampleSchemaPath,
-    };
-  },
+      const [organization, project, _] = parts;
+      return `https://dev.azure.com/${organization}/${project}/_settings/serviceHooks`;
+    }
+    case VCSType.GITHUB:
+      return `${props.repositoryInfo.webUrl}/settings/hooks`;
+    case VCSType.BITBUCKET:
+      return `${props.repositoryInfo.webUrl}/admin/webhooks`;
+    case VCSType.GITLAB:
+      return `${props.repositoryInfo.webUrl}/-/hooks`;
+  }
+  return "";
 });
+
+const validateResourceId = async (
+  resourceId: ResourceId
+): Promise<ValidatedMessage[]> => {
+  if (!resourceId) {
+    return [];
+  }
+
+  try {
+    const instance = await vcsConnectorStore.getOrFetchConnector(
+      props.project.name,
+      resourceId
+    );
+    if (instance) {
+      return [
+        {
+          type: "error",
+          message: t("resource-id.validation.duplicated", {
+            resource: t("resource.instance"),
+          }),
+        },
+      ];
+    }
+  } catch (error) {
+    if (getErrorCode(error) !== Status.NOT_FOUND) {
+      throw error;
+    }
+  }
+  return [];
+};
 </script>

@@ -1,24 +1,6 @@
 <template>
   <div class="relative h-screen overflow-hidden flex flex-col">
-    <template v-if="isDemo">
-      <BannerDemo />
-    </template>
-    <template v-else-if="isNearTrialExpireTime">
-      <BannerTrial />
-    </template>
-    <template v-else-if="isReadonly">
-      <div
-        class="h-12 w-full text-lg font-medium bg-yellow-500 text-white flex justify-center items-center"
-      >
-        Server is in readonly mode. You can still view the console, but any
-        change attempt will fail.
-      </div>
-    </template>
-    <nav class="bg-white border-b border-block-border">
-      <div class="max-w-full mx-auto px-4">
-        <DashboardHeader />
-      </div>
-    </nav>
+    <BannersWrapper />
     <!-- Suspense is experimental, be aware of the potential change -->
     <Suspense>
       <template #default>
@@ -26,64 +8,68 @@
           <router-view name="body" />
         </ProvideDashboardContext>
       </template>
-      <template #fallback>
-        <div class="flex flex-row justify-between p-4 space-x-2">
-          <span class="items-center flex">Loading...</span>
-          <button
-            class="items-center flex justify-center btn-normal"
-            @click.prevent="ping"
-          >
-            Ping
-          </button>
-        </div>
-      </template>
+    </Suspense>
+    <Suspense v-if="!hideHelp">
+      <HelpDrawer />
     </Suspense>
   </div>
 </template>
 
-<script lang="ts">
-import { useStore } from "vuex";
-import ProvideDashboardContext from "../components/ProvideDashboardContext.vue";
-import DashboardHeader from "../views/DashboardHeader.vue";
-import BannerDemo from "../views/BannerDemo.vue";
-import BannerTrial from "../views/BannerTrial.vue";
-import { ServerInfo } from "../types";
-import { computed } from "vue";
+<script lang="ts" setup>
+import { reactive, watch } from "vue";
+import { useRoute } from "vue-router";
+import BannersWrapper from "@/components/BannersWrapper.vue";
+import HelpDrawer from "@/components/HelpDrawer";
+import ProvideDashboardContext from "@/components/ProvideDashboardContext.vue";
+import { useAppFeature, useHelpStore, useUIStateStore } from "@/store";
+import type { RouteMapList } from "@/types";
 
-export default {
-  name: "DashboardLayout",
-  components: {
-    ProvideDashboardContext,
-    DashboardHeader,
-    BannerDemo,
-    BannerTrial,
-  },
-  setup() {
-    const store = useStore();
+interface LocalState {
+  helpTimer: number | undefined;
+  RouteMapList: RouteMapList | null;
+}
 
-    const ping = () => {
-      store.dispatch("actuator/fetchInfo").then((info: ServerInfo) => {
-        store.dispatch("notification/pushNotification", {
-          module: "bytebase",
-          style: "SUCCESS",
-          title: info,
+const route = useRoute();
+const state = reactive<LocalState>({
+  helpTimer: undefined,
+  RouteMapList: null,
+});
+const hideHelp = useAppFeature("bb.feature.hide-help");
+
+// watch route change for help
+watch(
+  () => route.name,
+  async (routeName) => {
+    const uiStateStore = useUIStateStore();
+    const helpStore = useHelpStore();
+
+    // Clear timer after every route change.
+    if (state.helpTimer) {
+      clearTimeout(state.helpTimer);
+      state.helpTimer = undefined;
+    }
+
+    // Hide opened help drawer if route changed.
+    helpStore.exitHelp();
+
+    if (!state.RouteMapList) {
+      const res = await fetch("/help/routeMapList.json");
+      state.RouteMapList = await res.json();
+    }
+
+    const helpId = state.RouteMapList?.find(
+      (pair) => pair.routeName === routeName
+    )?.helpName;
+
+    if (helpId && !uiStateStore.getIntroStateByKey(`${helpId}`)) {
+      state.helpTimer = window.setTimeout(() => {
+        helpStore.showHelp(helpId, true);
+        uiStateStore.saveIntroStateByKey({
+          key: `${helpId}`,
+          newState: true,
         });
-      });
-    };
-
-    const isDemo = computed(() => store.getters["actuator/isDemo"]());
-    const isNearTrialExpireTime = computed(() =>
-      store.getters["subscription/isNearTrialExpireTime"]()
-    );
-
-    const isReadonly = computed(() => store.getters["actuator/isReadonly"]());
-
-    return {
-      ping,
-      isDemo,
-      isReadonly,
-      isNearTrialExpireTime,
-    };
-  },
-};
+      }, 1000);
+    }
+  }
+);
 </script>

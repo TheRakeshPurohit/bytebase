@@ -1,0 +1,320 @@
+package mysql
+
+import (
+	"fmt"
+	"log/slog"
+	"regexp"
+	"strings"
+
+	"github.com/pkg/errors"
+
+	"github.com/antlr4-go/antlr/v4"
+	parser "github.com/bytebase/mysql-parser"
+
+	"github.com/bytebase/bytebase/backend/plugin/parser/base"
+	"github.com/bytebase/bytebase/backend/plugin/parser/tokenizer"
+)
+
+// ParseResult is the result of parsing a MySQL statement.
+type ParseResult struct {
+	Tree     antlr.Tree
+	Tokens   *antlr.CommonTokenStream
+	BaseLine int
+}
+
+// ParseMySQL parses the given SQL statement and returns the AST.
+func ParseMySQL(statement string, options ...tokenizer.Option) ([]*ParseResult, error) {
+	statement, err := DealWithDelimiter(statement, options...)
+	if err != nil {
+		return nil, err
+	}
+	list, err := parseInputStream(antlr.NewInputStream(statement))
+	// HACK(p0ny): the callee may end up in an infinite loop, we print the statement here to help debug.
+	if err != nil && strings.Contains(err.Error(), "split SQL statement timed out") {
+		slog.Info("split SQL statement timed out", "statement", statement)
+	}
+	return list, err
+}
+
+// DealWithDelimiter converts the delimiter statement to comment, also converts the following statement's delimiter to semicolon(`;`).
+func DealWithDelimiter(statement string, options ...tokenizer.Option) (string, error) {
+	has, list, err := hasDelimiter(statement, options...)
+	if err != nil {
+		return "", err
+	}
+	if has {
+		var result []string
+		delimiter := `;`
+		for _, sql := range list {
+			if IsDelimiter(sql.Text) {
+				delimiter, err = ExtractDelimiter(sql.Text)
+				if err != nil {
+					return "", err
+				}
+				result = append(result, "-- "+sql.Text)
+				continue
+			}
+			// TODO(rebelice): after deal with delimiter, we may cannot get the right line number, fix it.
+			if delimiter != ";" && !sql.Empty {
+				result = append(result, fmt.Sprintf("%s;", strings.TrimSuffix(sql.Text, delimiter)))
+			} else {
+				result = append(result, sql.Text)
+			}
+		}
+
+		statement = strings.Join(result, "\n")
+	}
+	return statement, nil
+}
+
+// RestoreDelimiter tries to restore the delimiter statement which is commented by DealWithDelimiter,
+//
+// Assumes the delimiter comment takes up a single line and matches the syntax `-- DELIMITER ?`,
+// also, one delimiter comment MUST only affect one statement, in the other words, the following statement cause UB:
+// -- DELIMITER ;
+// SELECT 1;
+// SELECT 2;
+// -- DELIMITER ;.
+// If the current delimiter is `;`, and meet `-- DELIMITER ;`, we would skip this delimiter comment.
+func RestoreDelimiter(statement string) (string, error) {
+	delimiterRegexp := regexp.MustCompile(`(?i)^-- DELIMITER\s+(?P<DELIMITER>[^\s\\]+)\s*`)
+	lines := strings.Split(statement, "\n")
+	var result strings.Builder
+	var buf strings.Builder
+	previousDelimiter := ";"
+
+	flushBuf := func(delimiter string) error {
+		bufStmt := buf.String()
+		buf.Reset()
+		// Lookup reversely to modify the last delimiter.
+		for i := len(bufStmt) - 1; i >= 0; i-- {
+			if bufStmt[i] == ';' {
+				bufStmt = bufStmt[:i] + delimiter + bufStmt[i+1:]
+				break
+			}
+		}
+		if _, err := result.WriteString(bufStmt); err != nil {
+			return errors.Wrapf(err, "failed to write string %q into builder", bufStmt)
+		}
+		return nil
+	}
+
+	for i, line := range lines {
+		matchList := delimiterRegexp.FindStringSubmatch(line)
+		if matchList == nil {
+			target := &result
+			if previousDelimiter != ";" {
+				target = &buf
+			}
+			// Like strings.Join.
+			s := line
+			if i != len(lines)-1 {
+				s = fmt.Sprintf("%s\n", line)
+			}
+			if _, err := target.WriteString(s); err != nil {
+				return "", errors.Wrapf(err, "failed to write string %q into builder", line)
+			}
+			continue
+		}
+		if len(matchList) != 2 {
+			return "", errors.Errorf("invalid delimiter comment %q", line)
+		}
+
+		// If meet delimiter again, we should convert the delimiter in buf to previous delimiter.
+		if previousDelimiter != ";" {
+			if err := flushBuf(previousDelimiter); err != nil {
+				return "", err
+			}
+		}
+
+		if matchList[1] != previousDelimiter {
+			if _, err := result.WriteString(fmt.Sprintf("DELIMITER %s\n", matchList[1])); err != nil {
+				return "", errors.Wrapf(err, "failed to write string %q into builder", line)
+			}
+		}
+		previousDelimiter = matchList[1]
+	}
+
+	if previousDelimiter != ";" {
+		if err := flushBuf(previousDelimiter); err != nil {
+			return "", err
+		}
+	}
+
+	return result.String(), nil
+}
+
+func parseSingleStatement(baseLine int, statement string) (antlr.Tree, *antlr.CommonTokenStream, error) {
+	input := antlr.NewInputStream(statement)
+	lexer := parser.NewMySQLLexer(input)
+	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
+
+	p := parser.NewMySQLParser(stream)
+
+	lexerErrorListener := &base.ParseErrorListener{
+		BaseLine: baseLine,
+	}
+	lexer.RemoveErrorListeners()
+	lexer.AddErrorListener(lexerErrorListener)
+
+	parserErrorListener := &base.ParseErrorListener{
+		BaseLine: baseLine,
+	}
+	p.RemoveErrorListeners()
+	p.AddErrorListener(parserErrorListener)
+
+	p.BuildParseTrees = true
+
+	tree := p.Script()
+
+	if lexerErrorListener.Err != nil {
+		return nil, nil, lexerErrorListener.Err
+	}
+
+	if parserErrorListener.Err != nil {
+		return nil, nil, parserErrorListener.Err
+	}
+
+	return tree, stream, nil
+}
+
+func mysqlAddSemicolonIfNeeded(sql string) string {
+	lexer := parser.NewMySQLLexer(antlr.NewInputStream(sql))
+	lexerErrorListener := &base.ParseErrorListener{}
+	lexer.RemoveErrorListeners()
+	lexer.AddErrorListener(lexerErrorListener)
+	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
+	stream.Fill()
+	if lexerErrorListener.Err != nil {
+		// If the lexer fails, we cannot add semicolon.
+		return sql
+	}
+	tokens := stream.GetAllTokens()
+	for i := len(tokens) - 1; i >= 0; i-- {
+		if tokens[i].GetChannel() != antlr.TokenDefaultChannel || tokens[i].GetTokenType() == parser.MySQLParserEOF {
+			continue
+		}
+
+		// The last default channel token is a semicolon.
+		if tokens[i].GetTokenType() == parser.MySQLParserSEMICOLON_SYMBOL {
+			return sql
+		}
+
+		var result []string
+		result = append(result, stream.GetTextFromInterval(antlr.NewInterval(0, tokens[i].GetTokenIndex())))
+		result = append(result, ";")
+		result = append(result, stream.GetTextFromInterval(antlr.NewInterval(tokens[i].GetTokenIndex()+1, tokens[len(tokens)-1].GetTokenIndex())))
+		return strings.Join(result, "")
+	}
+	return sql
+}
+
+func parseInputStream(input *antlr.InputStream) ([]*ParseResult, error) {
+	var result []*ParseResult
+	lexer := parser.NewMySQLLexer(input)
+	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
+
+	list, err := splitMySQLStatement(stream)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(list) > 0 {
+		list[len(list)-1].Text = mysqlAddSemicolonIfNeeded(list[len(list)-1].Text)
+	}
+
+	baseLine := 0
+	for _, s := range list {
+		tree, tokens, err := parseSingleStatement(baseLine, s.Text)
+		if err != nil {
+			return nil, err
+		}
+
+		if isEmptyStatement(tokens) {
+			continue
+		}
+
+		result = append(result, &ParseResult{
+			Tree:     tree,
+			Tokens:   tokens,
+			BaseLine: s.BaseLine,
+		})
+		baseLine = s.LastLine
+	}
+
+	return result, nil
+}
+
+func isEmptyStatement(tokens *antlr.CommonTokenStream) bool {
+	for _, token := range tokens.GetAllTokens() {
+		if token.GetChannel() == antlr.TokenDefaultChannel && token.GetTokenType() != parser.MySQLParserSEMICOLON_SYMBOL && token.GetTokenType() != parser.MySQLParserEOF {
+			return false
+		}
+	}
+	return true
+}
+
+// IsDelimiter returns true if the statement is a delimiter statement.
+func IsDelimiter(stmt string) bool {
+	delimiterRegex := `(?i)^\s*DELIMITER\s+`
+	re := regexp.MustCompile(delimiterRegex)
+	return re.MatchString(stmt)
+}
+
+// ExtractDelimiter extracts the delimiter from the delimiter statement.
+func ExtractDelimiter(stmt string) (string, error) {
+	delimiterRegex := `(?i)^\s*DELIMITER\s+(?P<DELIMITER>[^\s\\]+)\s*`
+	re := regexp.MustCompile(delimiterRegex)
+	matchList := re.FindStringSubmatch(stmt)
+	index := re.SubexpIndex("DELIMITER")
+	if index >= 0 && index < len(matchList) {
+		return matchList[index], nil
+	}
+	return "", errors.Errorf("cannot extract delimiter from %q", stmt)
+}
+
+func hasDelimiter(statement string, options ...tokenizer.Option) (bool, []base.SingleSQL, error) {
+	// use splitTiDBMultiSQL to check if the statement has delimiter
+	t := tokenizer.NewTokenizer(statement, options...)
+	list, err := t.SplitTiDBMultiSQL()
+	if err != nil {
+		return false, nil, errors.Errorf("failed to split multi sql: %v", err)
+	}
+
+	for _, sql := range list {
+		if IsDelimiter(sql.Text) {
+			return true, list, nil
+		}
+	}
+
+	return false, list, nil
+}
+
+// IsTopMySQLRule returns true if the given context is a top-level MySQL rule.
+func IsTopMySQLRule(ctx *antlr.BaseParserRuleContext) bool {
+	if ctx.GetParent() == nil {
+		return false
+	}
+	switch ctx.GetParent().(type) {
+	case *parser.SimpleStatementContext:
+		if ctx.GetParent().GetParent() == nil {
+			return false
+		}
+		if _, ok := ctx.GetParent().GetParent().(*parser.QueryContext); !ok {
+			return false
+		}
+	case *parser.CreateStatementContext, *parser.DropStatementContext, *parser.TransactionOrLockingStatementContext, *parser.AlterStatementContext:
+		if ctx.GetParent().GetParent() == nil {
+			return false
+		}
+		if ctx.GetParent().GetParent().GetParent() == nil {
+			return false
+		}
+		if _, ok := ctx.GetParent().GetParent().GetParent().(*parser.QueryContext); !ok {
+			return false
+		}
+	default:
+		return false
+	}
+	return true
+}
