@@ -36,6 +36,8 @@ export const resolveLocalApprovalConfig = async (
       source:
         protoRule.source ||
         WorkspaceApprovalSetting_Rule_Source.SOURCE_UNSPECIFIED,
+      title: protoRule.template?.title || "",
+      description: protoRule.template?.description || "",
       condition,
       flow:
         protoRule.template?.flow || create(ApprovalFlowSchema, { roles: [] }),
@@ -77,6 +79,8 @@ export const buildWorkspaceApprovalSetting = async (
       condition: create(ExprSchema, { expression: rule.condition }),
       template: {
         flow: rule.flow,
+        title: rule.title,
+        description: rule.description,
       },
     });
     protoRules.push(protoRule);

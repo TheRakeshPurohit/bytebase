@@ -1,7 +1,8 @@
 <template>
   <NModal
     :show="show"
-    :mask-closable="false"
+    :mask-closable="true"
+    :close-on-esc="true"
     @update:show="$emit('update:show', $event)"
   >
     <div
@@ -18,6 +19,30 @@
       </div>
 
       <div class="flex-1 flex flex-col px-6 py-4 overflow-hidden gap-y-4">
+        <div class="flex flex-col gap-y-2">
+          <h3 class="font-medium text-sm text-control">
+            {{ $t("common.title") }}
+          </h3>
+          <NInput
+            v-model:value="state.title"
+            :placeholder="$t('common.title')"
+            :disabled="!allowAdmin"
+          />
+        </div>
+
+        <div class="flex flex-col gap-y-2">
+          <h3 class="font-medium text-sm text-control">
+            {{ $t("common.description") }}
+          </h3>
+          <NInput
+            v-model:value="state.description"
+            type="textarea"
+            :placeholder="$t('common.description')"
+            :disabled="!allowAdmin"
+            :rows="2"
+          />
+        </div>
+
         <div class="flex-1 flex flex-col gap-y-2 overflow-y-auto">
           <h3 class="font-medium text-sm text-control">
             {{ $t("cel.condition.self") }}
@@ -71,7 +96,7 @@
 <script lang="ts" setup>
 import { create as createProto } from "@bufbuild/protobuf";
 import { cloneDeep, head } from "lodash-es";
-import { NButton, NModal } from "naive-ui";
+import { NButton, NInput, NModal } from "naive-ui";
 import { computed, reactive, watch } from "vue";
 import ExprEditor from "@/components/ExprEditor";
 import type { ConditionGroupExpr } from "@/plugins/cel";
@@ -98,6 +123,8 @@ import { StepsTable } from "../common";
 import { useCustomApprovalContext } from "../context";
 
 type LocalState = {
+  title: string;
+  description: string;
   conditionExpr: ConditionGroupExpr;
   flow: ApprovalFlow;
 };
@@ -118,6 +145,8 @@ const context = useCustomApprovalContext();
 const { allowAdmin } = context;
 
 const state = reactive<LocalState>({
+  title: "",
+  description: "",
   conditionExpr: wrapAsGroup(emptySimpleExpr()),
   flow: createProto(ApprovalFlowSchema, { roles: [] }),
 });
@@ -138,10 +167,14 @@ const resolveLocalState = async () => {
   // Reset to empty state immediately to unmount old Condition components.
   // This prevents component reuse issues when switching between rules,
   // where the ValueInput watch would reset values when factor/operator changes.
+  state.title = "";
+  state.description = "";
   state.conditionExpr = wrapAsGroup(emptySimpleExpr());
   state.flow = createProto(ApprovalFlowSchema, { roles: [] });
 
   if (props.rule) {
+    state.title = props.rule.title || "";
+    state.description = props.rule.description || "";
     if (props.rule.condition) {
       const parsedExprs = await batchConvertCELStringToParsedExpr([
         props.rule.condition,
@@ -174,6 +207,8 @@ const handleSave = async () => {
   const condition = expressions[0];
 
   const ruleData: Partial<LocalApprovalRule> = {
+    title: state.title,
+    description: state.description,
     condition,
     conditionExpr: cloneDeep(state.conditionExpr),
     flow: cloneDeep(state.flow),
