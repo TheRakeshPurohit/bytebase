@@ -47,6 +47,7 @@
         :highlight="grant.name === highlightAccessGrantName"
         :issue="issueByGrantName.get(grant.name)"
         @run="handleRun"
+        @request="handleRequest"
       />
       <div
         v-if="nextPageToken"
@@ -77,6 +78,9 @@
 
     <AccessGrantRequestDrawer
       v-if="showDrawer"
+      :query="pendingCreate?.query"
+      :unmask="pendingCreate?.unmask"
+      :targets="pendingCreate?.targets"
       @close="handleDrawerClose"
     />
   </div>
@@ -142,6 +146,7 @@ const { highlightAccessGrantName } = useSQLEditorContext();
 
 const showDrawer = ref(false);
 const loading = ref(false);
+const pendingCreate = ref<AccessGrant>();
 const accessGrantList = ref<AccessGrant[]>([]);
 const nextPageToken = ref("");
 // Maps access grant name → Issue for PENDING grants with an associated issue.
@@ -152,6 +157,15 @@ const useSmallLayout = computed(
   () => containerWidth.value > 0 && containerWidth.value < 250
 );
 
+watch(
+  () => showDrawer.value,
+  (showDrawer) => {
+    if (!showDrawer) {
+      pendingCreate.value = undefined;
+    }
+  }
+);
+
 const hasJITFeature = computed(() => hasFeature(PlanFeature.FEATURE_JIT));
 
 const project = computed(() =>
@@ -160,7 +174,16 @@ const project = computed(() =>
 
 const searchParams = ref<SearchParams>({
   query: "",
-  scopes: [],
+  scopes: [
+    {
+      id: "status",
+      value: AccessGrant_Status[AccessGrant_Status.ACTIVE],
+    },
+    {
+      id: "status",
+      value: AccessGrant_Status[AccessGrant_Status.PENDING],
+    },
+  ],
 });
 
 const scopeOptions = computed((): ScopeOption[] => {
@@ -231,25 +254,18 @@ const selectedStatuses = computed(() =>
   getValuesFromSearchParams(searchParams.value, "status")
 );
 
-const statusMap: Record<string, AccessGrant_Status> = {
-  ACTIVE: AccessGrant_Status.ACTIVE,
-  PENDING: AccessGrant_Status.PENDING,
-  REVOKED: AccessGrant_Status.REVOKED,
-  EXPIRED: AccessGrant_Status.ACTIVE,
-};
-
 // Build AccessFilter from search params.
 const filter = computed((): AccessFilter => {
   const f: AccessFilter = {};
 
   const statuses = selectedStatuses.value;
-  if (statuses.length === 1) {
-    f.status = statusMap[statuses[0]];
-    if (statuses[0] === "EXPIRED") {
-      f.expireTsBefore = Date.now();
-    } else if (statuses[0] === "ACTIVE") {
-      f.expireTsAfter = Date.now();
-    }
+  f.status = statuses
+    .filter((s) => s !== "EXPIRED")
+    .map((s) => AccessGrant_Status[s as keyof typeof AccessGrant_Status]);
+  if (statuses.includes("EXPIRED")) {
+    f.expireTsBefore = Date.now();
+  } else if (f.status.includes(AccessGrant_Status.ACTIVE)) {
+    f.expireTsAfter = Date.now();
   }
 
   const database = getValueFromSearchParams(
@@ -341,6 +357,11 @@ watch(
 const handleDrawerClose = () => {
   showDrawer.value = false;
   fetchAccessGrants();
+};
+
+const handleRequest = async (grant: AccessGrant) => {
+  pendingCreate.value = grant;
+  showDrawer.value = true;
 };
 
 const handleRun = async (grant: AccessGrant) => {

@@ -51,6 +51,14 @@
           {{ $t("common.run") }}
         </NButton>
         <NButton
+          v-else-if="grant.status !== AccessGrant_Status.PENDING"
+          tertiary
+          size="tiny"
+          @click.stop="$emit('request', grant)"
+        >
+          {{ $t("sql-editor.re-request") }}
+        </NButton>
+        <NButton
           v-if="grant.issue"
           tertiary
           size="tiny"
@@ -90,6 +98,7 @@ const props = defineProps<{
 
 defineEmits<{
   (e: "run", grant: AccessGrant): void;
+  (e: "request", grant: AccessGrant): void;
 }>();
 
 const { t } = useI18n();
